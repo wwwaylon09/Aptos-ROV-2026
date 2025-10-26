@@ -5,7 +5,7 @@ import time
 
 # Initialize socket connection
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect(("192.168.88.253", 5000))  # Change the IP address to the server's IP address
+s.connect(("192.168.42.42", 5000))  # Change the IP address to the server's IP address
 
 # Initialize Pygame and joystick
 pygame.init()
@@ -14,19 +14,22 @@ pygame.joystick.init()
 # Variables to control the main loop and joystick state
 run = True
 gotjoystick = False
+stabilization_debounce = True
 
-# Initial claw angles
+# Initial input states
 claw_angle = 50
 claw_rotate = 90
 syringe_angle = 90
 camera_angle = 90
+enable_stabilization = False
 
 # Input array to store joystick inputs
-input = [0] * 12
+input = [0] * 13
 input[8] = claw_angle
 input[9] = claw_rotate
 input[10] = syringe_angle
 input[11] = camera_angle
+input[12] = enable_stabilization
 print(input)
 
 def clamp(value):
@@ -82,6 +85,9 @@ try:
             pitch = 0
             roll = 0
 
+            # Need this value outside of the loop to prevent it from being falsely set by other buttons
+            stabilization_pressed = False
+
             # Check joystick buttons
             for button in range(17):
                 pressed = joystick.get_button(button)
@@ -114,12 +120,23 @@ try:
                         camera_angle = 0
                     if button == 2:
                         camera_angle = 180
+                    if button == 3:
+                        stabilization_pressed = True
 
                     input[8] = claw_angle
                     input[9] = claw_rotate
                     input[10] = syringe_angle
                     input[11] = camera_angle
+                    input[12] = enable_stabilization
 
+            # Check for stabilization button pressed
+            if stabilization_pressed:
+                # Using a debounce ensures stabilization isn't constantly toggled while the button is pressed
+                if stabilization_debounce:
+                    stabilization_debounce = False
+                    enable_stabilization = not enable_stabilization
+            else:
+                stabilization_debounce = True
 
             # Check joystick axes
             yaw_val = .5*joystick.get_axis(0)
