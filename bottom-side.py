@@ -57,7 +57,13 @@ def lerp(a, b, t):
 
 # Merge joystick and gyro inputs, but prioritize joystick inputs
 def merge_inputs(joystick, gyro):
-    return lerp(gyro, joystick, math.fabs(joystick * 2))
+    # Avoid imaginary numbers if gyro input is negative
+    if gyro < 0:
+        gyro = (gyro * -1)**0.5 * -1
+    else:
+        gyro **= 0.5
+        
+    return lerp(gyro, joystick, math.fabs(joystick))
 
 # Main server loop to receive and process data
 while True:
@@ -88,4 +94,3 @@ while True:
         pca.channels[motor_5].duty_cycle = convert(inputs[7])
         pca.channels[motor_5].duty_cycle = convert(inputs[8])
         
-
