@@ -36,41 +36,6 @@ def clamp(value):
     """Clamp a value between -1.0 and 1.0."""
     return max(-1.0, min(1.0, value))
 
-def calculate_motor_pwm(forward_backward, left_right, yaw):
-    """
-    Calculate PWM values for four motors based on joystick input.
-    """
-    motor1_pwm = round(clamp(forward_backward - left_right - yaw), 3)
-    motor2_pwm = round(clamp(forward_backward + left_right + yaw), 3)
-    motor3_pwm = round(clamp(-forward_backward - left_right + yaw), 3)
-    motor4_pwm = round(clamp(-forward_backward + left_right - yaw), 3)
-
-    input[0] = motor1_pwm
-    input[1] = motor2_pwm
-    input[2] = motor3_pwm
-    input[3] = motor4_pwm
-
-    return {
-        "motor1": motor1_pwm,
-        "motor2": motor2_pwm,
-        "motor3": motor3_pwm,
-        "motor4": motor4_pwm,
-    }
-
-def calculate_lift(up_down, pitch, roll):
-    """
-    Calculate PWM values for lift motors based on joystick input.
-    """
-    motor5_pwm = round(clamp(up_down - roll), 3)
-    motor6_pwm = round(clamp(up_down + roll), 3)
-    motor7_pwm = round(clamp(up_down + pitch), 3)
-    motor8_pwm = round(clamp(up_down - pitch), 3)
-
-    input[4] = motor5_pwm
-    input[5] = motor6_pwm
-    input[6] = motor7_pwm
-    input[7] = motor8_pwm
-
 try:
     while run:
         # Handle Pygame events
@@ -139,7 +104,7 @@ try:
                 stabilization_debounce = True
 
             # Check joystick axes
-            yaw_val = .5*joystick.get_axis(0)
+            yaw = joystick.get_axis(0)
             forward_backward = -joystick.get_axis(3)
             left_right = joystick.get_axis(2)
             up_down = joystick.get_axis(1)
@@ -148,12 +113,18 @@ try:
             deadband = 0.05
             forward_backward = 0 if abs(forward_backward) < deadband else forward_backward
             left_right = 0 if abs(left_right) < deadband else left_right
-            yaw_val = 0 if abs(yaw_val) < deadband else yaw_val
+            yaw = 0 if abs(yaw) < deadband else yaw
             up_down = 0 if abs(up_down) < deadband else up_down
 
-            # Calculate motor speeds and lift
-            motor_speeds = calculate_motor_pwm(forward_backward, left_right, yaw_val)
-            calculate_lift(up_down, pitch, roll)
+            # Calculate motor speeds from joystick inputs
+            input[0] = round(clamp(-forward_backward + left_right + up_down - pitch + yaw + roll), 3)
+            input[1] = round(clamp(-forward_backward - left_right + up_down - pitch - yaw - roll), 3)
+            input[2] = round(clamp(-forward_backward + left_right - up_down + pitch + yaw - roll), 3)
+            input[3] = round(clamp(-forward_backward - left_right - up_down + pitch - yaw + roll), 3)
+            input[4] = round(clamp(forward_backward + left_right + up_down + pitch - yaw + roll), 3)
+            input[5] = round(clamp(forward_backward - left_right + up_down + pitch + yaw - roll), 3)
+            input[6] = round(clamp(forward_backward + left_right - up_down - pitch - yaw - roll), 3)
+            input[7] = round(clamp(forward_backward - left_right - up_down - pitch + yaw + roll), 3)
             print(input)
 
             # Send input data to the server
