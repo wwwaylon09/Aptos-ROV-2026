@@ -24,14 +24,14 @@ pca.frequency = 50
 
 # Motor and Servo configurations
 # Change these based on which port each motor is pluged in to
-motor_1 = 4
-motor_2 = 6
-motor_3 = 0
-motor_4 = 2
+motor_1 = 1
+motor_2 = 2
+motor_3 = 3
+motor_4 = 4
 motor_5 = 5
-motor_6 = 3
+motor_6 = 6
 motor_7 = 7
-motor_8 = 1
+motor_8 = 8
 
 claw_open = 15
 claw_rotate = 14
@@ -81,7 +81,14 @@ while True:
             pitch, roll = pitch / math.pi, roll / math.pi
             
             # Merge inputs
-            inputs[2] = merge_inputs(inputs[2], roll)
+            inputs[0] = merge_inputs(inputs[0], roll - pitch)
+            inputs[1] = merge_inputs(inputs[1], -roll - pitch)
+            inputs[2] = merge_inputs(inputs[2], -roll + pitch)
+            inputs[3] = merge_inputs(inputs[3], roll + pitch)
+            inputs[4] = merge_inputs(inputs[4], roll + pitch)
+            inputs[5] = merge_inputs(inputs[5], -roll + pitch)
+            inputs[6] = merge_inputs(inputs[6], -roll - pitch)
+            inputs[7] = merge_inputs(inputs[7], roll - pitch)
         
         print(inputs)
         pca.channels[motor_1].duty_cycle = convert(inputs[0])
@@ -89,8 +96,8 @@ while True:
         pca.channels[motor_3].duty_cycle = convert(inputs[2])
         pca.channels[motor_4].duty_cycle = convert(inputs[3])
         pca.channels[motor_5].duty_cycle = convert(inputs[4])
-        pca.channels[motor_5].duty_cycle = convert(inputs[5])
-        pca.channels[motor_5].duty_cycle = convert(inputs[6])
-        pca.channels[motor_5].duty_cycle = convert(inputs[7])
-        pca.channels[motor_5].duty_cycle = convert(inputs[8])
+        pca.channels[motor_6].duty_cycle = convert(inputs[5])
+        pca.channels[motor_7].duty_cycle = convert(inputs[6])
+        pca.channels[motor_8].duty_cycle = convert(inputs[7])
         
+
