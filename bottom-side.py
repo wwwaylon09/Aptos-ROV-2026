@@ -6,32 +6,36 @@ import pickle
 import board
 import adafruit_pca9685
 import adafruit_mpu6050
+import gpiozero
 import math
+import time
 
 # Initialize socket server
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.bind(('', 5000))
 s.listen(1)
-print("Server is now running")
+print("Server is now running. Waiting for client...")
 connection, client_address = s.accept()
+print("Client connected")
 
 # Initialize hardware components
 i2c = board.I2C()
 pca = adafruit_pca9685.PCA9685(i2c)
 mpu = adafruit_mpu6050.MPU6050(i2c)
+relay_pin = gpiozero.LED(4)
 
 pca.frequency = 50
 
 # Motor and Servo configurations
 # Change these based on which port each motor is pluged in to
-motor_1 = 1
-motor_2 = 2
-motor_3 = 3
-motor_4 = 4
-motor_5 = 5
-motor_6 = 6
-motor_7 = 7
-motor_8 = 8
+motor_1 = 0
+motor_2 = 1
+motor_3 = 2
+motor_4 = 3
+motor_5 = 4
+motor_6 = 5
+motor_7 = 6
+motor_8 = 7
 
 claw_open = 15
 claw_rotate = 14
@@ -55,15 +59,19 @@ def calculate_orientation():
 def lerp(a, b, t):
     return a + (b - a) * t
 
-# Merge joystick and gyro inputs, but prioritize joystick inputs
-def merge_inputs(joystick, gyro):
-    # Avoid imaginary numbers if gyro input is negative
-    if gyro < 0:
-        gyro = (gyro * -1)**0.5 * -1
+# Merge joystick and MPU inputs, but prioritize joystick inputs
+def merge_inputs(joystick_input, mpu_input):
+    # Avoid imaginary numbers if MPU input is negative
+    if mpu_input < 0:
+        mpu_input = -((-mpu_input)**0.5)
     else:
-        gyro **= 0.5
+        mpu_input **= 0.5
         
-    return lerp(gyro, joystick, math.fabs(joystick))
+    return lerp(mpu_input, joystick_input, math.fabs(joystick_input))
+
+# Send a signal to power the ESC relay
+print("Powering up ESCs")
+relay_pin.on()
 
 # Main server loop to receive and process data
 while True:
@@ -74,9 +82,10 @@ while True:
     else:
         # Get joystick inputs from server
         inputs = pickle.loads(data)
+        
         # Check if stabilization is enabled
         if inputs[12]:
-            # Get angle inputs from gyro
+            # Get angle inputs from MPU
             pitch, roll = calculate_orientation()
             pitch, roll = pitch / math.pi, roll / math.pi
             
@@ -91,6 +100,7 @@ while True:
             inputs[7] = merge_inputs(inputs[7], roll - pitch)
         
         print(inputs)
+        # Set each motor's channel to its respective input
         pca.channels[motor_1].duty_cycle = convert(inputs[0])
         pca.channels[motor_2].duty_cycle = convert(inputs[1])
         pca.channels[motor_3].duty_cycle = convert(inputs[2])
@@ -99,5 +109,3 @@ while True:
         pca.channels[motor_6].duty_cycle = convert(inputs[5])
         pca.channels[motor_7].duty_cycle = convert(inputs[6])
         pca.channels[motor_8].duty_cycle = convert(inputs[7])
-        
-
