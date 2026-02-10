@@ -8,7 +8,6 @@ import adafruit_pca9685
 import adafruit_mpu6050
 import gpiozero
 import math
-import time
 
 # Initialize socket server
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
