@@ -12,8 +12,7 @@ pygame.init()
 pygame.joystick.init()
 
 # Variables to control the main loop and joystick state
-run = True
-gotjoystick = False
+got_joystick = False
 stabilization_debounce = True
 
 # Initial input states
@@ -37,15 +36,15 @@ def clamp(value):
     return max(-1.0, min(1.0, value))
 
 try:
-    while run:
+    while True:
         # Handle Pygame events
         for event in pygame.event.get():
             if event.type == pygame.JOYDEVICEADDED:
                 joystick = pygame.joystick.Joystick(event.device_index)
-                gotjoystick = True
+                got_joystick = True
                 print(joystick)
 
-        if gotjoystick:
+        if got_joystick:
             # Initialize pitch and roll
             pitch = 0
             roll = 0
