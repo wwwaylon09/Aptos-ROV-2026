@@ -1,11 +1,17 @@
+import json
 import socket
-import pickle
+import struct
 import pygame
 import time
+from typing import Optional
 
-# Initialize socket connection
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect(("192.168.42.42", 5000))  # Change the IP address to the server's IP address
+SERVER_IP = "192.168.42.42"  # Change to the server's IP address
+SERVER_PORT = 5000
+SEND_HZ = 50
+DEADBAND = 0.05
+RECONNECT_DELAY_SECONDS = 1.0
+SOCKET_TIMEOUT_SECONDS = 2.0
+
 
 # Initialize Pygame and joystick
 pygame.init()
@@ -14,6 +20,7 @@ pygame.joystick.init()
 # Variables to control the main loop and joystick state
 got_joystick = False
 stabilization_debounce = True
+joystick: Optional[pygame.joystick.Joystick] = None
 
 # Initial input states
 claw_angle = 50
@@ -23,17 +30,42 @@ camera_angle = 90
 enable_stabilization = False
 
 # Input array to store joystick inputs
-input = [0] * 13
-input[8] = claw_angle
-input[9] = claw_rotate
-input[10] = syringe_angle
-input[11] = camera_angle
-input[12] = enable_stabilization
-print(input)
+control_input = [0] * 13
+control_input[8] = claw_angle
+control_input[9] = claw_rotate
+control_input[10] = syringe_angle
+control_input[11] = camera_angle
+control_input[12] = enable_stabilization
+print(control_input)
+
 
 def clamp(value):
     """Clamp a value between -1.0 and 1.0."""
     return max(-1.0, min(1.0, value))
+
+
+def connect_with_retry() -> socket.socket:
+    """Continuously attempt to connect to the server."""
+    while True:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(SOCKET_TIMEOUT_SECONDS)
+            sock.connect((SERVER_IP, SERVER_PORT))
+            print(f"Connected to {SERVER_IP}:{SERVER_PORT}")
+            return sock
+        except OSError as exc:
+            print(f"Socket connection failed: {exc}. Retrying in {RECONNECT_DELAY_SECONDS}s...")
+            time.sleep(RECONNECT_DELAY_SECONDS)
+
+
+def send_frame(sock: socket.socket, payload: list):
+    """Send a length-prefixed JSON payload over TCP."""
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    header = struct.pack("!I", len(data))
+    sock.sendall(header + data)
+
+
+s = connect_with_retry()
 
 try:
     while True:
@@ -42,9 +74,13 @@ try:
             if event.type == pygame.JOYDEVICEADDED:
                 joystick = pygame.joystick.Joystick(event.device_index)
                 got_joystick = True
-                print(joystick)
+                print(f"Joystick connected: {joystick.get_name()}")
+            elif event.type == pygame.JOYDEVICEREMOVED:
+                got_joystick = False
+                joystick = None
+                print("Joystick disconnected")
 
-        if got_joystick:
+        if got_joystick and joystick is not None:
             # Initialize pitch and roll
             pitch = 0
             roll = 0
@@ -87,11 +123,11 @@ try:
                     if button == 3:
                         stabilization_pressed = True
 
-                    input[8] = claw_angle
-                    input[9] = claw_rotate
-                    input[10] = syringe_angle
-                    input[11] = camera_angle
-                    input[12] = enable_stabilization
+                    control_input[8] = claw_angle
+                    control_input[9] = claw_rotate
+                    control_input[10] = syringe_angle
+                    control_input[11] = camera_angle
+                    control_input[12] = enable_stabilization
 
             # Check for stabilization button pressed
             if stabilization_pressed:
@@ -102,6 +138,9 @@ try:
             else:
                 stabilization_debounce = True
 
+            # Ensure latest stabilization value is always transmitted
+            control_input[12] = enable_stabilization
+
             # Check joystick axes
             yaw = joystick.get_axis(0)
             forward_backward = -joystick.get_axis(3)
@@ -109,30 +148,43 @@ try:
             up_down = joystick.get_axis(1)
 
             # Apply deadband to joystick input
-            deadband = 0.05
-            forward_backward = 0 if abs(forward_backward) < deadband else forward_backward
-            left_right = 0 if abs(left_right) < deadband else left_right
-            yaw = 0 if abs(yaw) < deadband else yaw
-            up_down = 0 if abs(up_down) < deadband else up_down
+            forward_backward = 0 if abs(forward_backward) < DEADBAND else forward_backward
+            left_right = 0 if abs(left_right) < DEADBAND else left_right
+            yaw = 0 if abs(yaw) < DEADBAND else yaw
+            up_down = 0 if abs(up_down) < DEADBAND else up_down
 
             # Calculate motor speeds from joystick inputs
-            input[0] = round(clamp(-forward_backward + left_right + up_down - pitch + yaw + roll), 3)
-            input[1] = round(clamp(-forward_backward - left_right + up_down - pitch - yaw - roll), 3)
-            input[2] = round(clamp(-forward_backward + left_right - up_down + pitch + yaw - roll), 3)
-            input[3] = round(clamp(-forward_backward - left_right - up_down + pitch - yaw + roll), 3)
-            input[4] = round(clamp(forward_backward + left_right + up_down + pitch - yaw + roll), 3)
-            input[5] = round(clamp(forward_backward - left_right + up_down + pitch + yaw - roll), 3)
-            input[6] = round(clamp(forward_backward + left_right - up_down - pitch - yaw - roll), 3)
-            input[7] = round(clamp(forward_backward - left_right - up_down - pitch + yaw + roll), 3)
-            print(input)
+            control_input[0] = round(clamp(-forward_backward + left_right + up_down - pitch + yaw + roll), 3)
+            control_input[1] = round(clamp(-forward_backward - left_right + up_down - pitch - yaw - roll), 3)
+            control_input[2] = round(clamp(-forward_backward + left_right - up_down + pitch + yaw - roll), 3)
+            control_input[3] = round(clamp(-forward_backward - left_right - up_down + pitch - yaw + roll), 3)
+            control_input[4] = round(clamp(forward_backward + left_right + up_down + pitch - yaw + roll), 3)
+            control_input[5] = round(clamp(forward_backward - left_right + up_down + pitch + yaw - roll), 3)
+            control_input[6] = round(clamp(forward_backward + left_right - up_down - pitch - yaw - roll), 3)
+            control_input[7] = round(clamp(forward_backward - left_right - up_down - pitch + yaw + roll), 3)
+            print(control_input)
 
-            # Send input data to the server
-            data = pickle.dumps(input)
-            s.send(data)
-            time.sleep(0.02)
+            # Send input data to the server using framed messages and reconnect on failure
+            try:
+                send_frame(s, control_input)
+            except (OSError, TimeoutError) as exc:
+                print(f"Send failed: {exc}. Reconnecting...")
+                try:
+                    s.close()
+                except OSError:
+                    pass
+                s = connect_with_retry()
+
+            time.sleep(1 / SEND_HZ)
 
 except KeyboardInterrupt:
     # Handle cleanup on exit
-    print("\nCtrl + C pressed. Cleaning Up")
-    joystick.quit()
+    print("\nCtrl + C pressed. Cleaning up")
+finally:
+    if joystick is not None:
+        joystick.quit()
     pygame.quit()
+    try:
+        s.close()
+    except OSError:
+        pass
