@@ -24,6 +24,7 @@ PORT = 5000
 SOCKET_TIMEOUT_SECONDS = 1.0
 MAX_FRAME_SIZE = 65536
 NO_DATA_FAILSAFE_SECONDS = 0.5
+HUD_UPDATE_INTERVAL_SECONDS = float(os.getenv("ROV_HUD_UPDATE_INTERVAL_SECONDS", "0.2"))
 
 # ---------------- Webcam Server Configuration ----------------
 WEBCAM_HOST = os.getenv("ROV_WEBCAM_HOST", "0.0.0.0")
@@ -267,14 +268,11 @@ def run_control_server(stop_event):
 
                     last_packet_time = now
 
-                    raw_inputs = list(inputs)
                     try:
                         pitch_deg, roll_deg, pitch_rad, roll_rad = calculate_orientation_degrees()
                     except OSError as exc:
                         print(f"MPU read failed: {exc}")
                         pitch_deg, roll_deg, pitch_rad, roll_rad = 0.0, 0.0, 0.0, 0.0
-
-                    update_hud_state(raw_inputs, pitch_deg, roll_deg)
 
                     if inputs[12]:
                         pitch, roll = pitch_rad / math.pi, roll_rad / math.pi
@@ -289,6 +287,7 @@ def run_control_server(stop_event):
                         inputs[7] = merge_inputs(inputs[7], roll - pitch)
 
                     apply_thrusters(inputs)
+                    update_hud_state(inputs, pitch_deg, roll_deg)
 
             except OSError as exc:
                 print(f"Control connection error: {exc}")
@@ -540,7 +539,7 @@ def index():
             updateHud(data.hud);
         }}
         updateStatus();
-        setInterval(updateStatus, 1000);
+        setInterval(updateStatus, {max(50, int(HUD_UPDATE_INTERVAL_SECONDS * 1000))});
         </script>
     </head>
     <body>
