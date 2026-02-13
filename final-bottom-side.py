@@ -24,6 +24,7 @@ PORT = 5000
 SOCKET_TIMEOUT_SECONDS = 1.0
 MAX_FRAME_SIZE = 65536
 NO_DATA_FAILSAFE_SECONDS = 0.5
+HUD_UPDATE_INTERVAL_SECONDS = float(os.getenv("ROV_HUD_UPDATE_INTERVAL_SECONDS", "0.2"))
 
 # ---------------- Webcam Server Configuration ----------------
 WEBCAM_HOST = os.getenv("ROV_WEBCAM_HOST", "0.0.0.0")
@@ -84,6 +85,20 @@ claw_open = 15
 claw_rotate = 14
 
 
+HUD_LOCK = threading.Lock()
+HUD_STATE = {
+    "thrusters": [0.0] * 8,
+    "claw_angle": 0.0,
+    "claw_rotation": 0.0,
+    "syringe_angle": 0.0,
+    "camera_angle": 0.0,
+    "stabilization_enabled": False,
+    "mpu_pitch_deg": 0.0,
+    "mpu_roll_deg": 0.0,
+    "client_connected": False,
+}
+
+
 # ---------------- Control Logic ----------------
 def convert(x):
     throttle_multiplier = 0.2
@@ -98,6 +113,11 @@ def calculate_orientation():
     pitch = math.atan2(accel_x, math.sqrt(accel_y**2 + accel_z**2))
     roll = math.atan2(-accel_y, accel_z)
     return pitch, roll
+
+
+def calculate_orientation_degrees():
+    pitch_rad, roll_rad = calculate_orientation()
+    return math.degrees(pitch_rad), math.degrees(roll_rad), pitch_rad, roll_rad
 
 
 def lerp(a, b, t):
@@ -123,6 +143,38 @@ def set_neutral_thrusters():
     pca.channels[motor_6].duty_cycle = neutral
     pca.channels[motor_7].duty_cycle = neutral
     pca.channels[motor_8].duty_cycle = neutral
+
+
+def set_client_connected(connected):
+    with HUD_LOCK:
+        HUD_STATE["client_connected"] = bool(connected)
+
+
+def update_hud_state(inputs, pitch_deg, roll_deg):
+    with HUD_LOCK:
+        HUD_STATE["thrusters"] = [float(value) for value in inputs[:8]]
+        HUD_STATE["claw_angle"] = float(inputs[8])
+        HUD_STATE["claw_rotation"] = float(inputs[9])
+        HUD_STATE["syringe_angle"] = float(inputs[10])
+        HUD_STATE["camera_angle"] = float(inputs[11])
+        HUD_STATE["stabilization_enabled"] = bool(inputs[12])
+        HUD_STATE["mpu_pitch_deg"] = float(pitch_deg)
+        HUD_STATE["mpu_roll_deg"] = float(roll_deg)
+
+
+def get_hud_state():
+    with HUD_LOCK:
+        return {
+            "thrusters": [round(value, 3) for value in HUD_STATE["thrusters"]],
+            "claw_angle": round(HUD_STATE["claw_angle"], 3),
+            "claw_rotation": round(HUD_STATE["claw_rotation"], 3),
+            "syringe_angle": round(HUD_STATE["syringe_angle"], 3),
+            "camera_angle": round(HUD_STATE["camera_angle"], 3),
+            "stabilization_enabled": HUD_STATE["stabilization_enabled"],
+            "mpu_pitch_deg": round(HUD_STATE["mpu_pitch_deg"], 2),
+            "mpu_roll_deg": round(HUD_STATE["mpu_roll_deg"], 2),
+            "client_connected": HUD_STATE["client_connected"],
+        }
 
 
 def apply_thrusters(inputs):
@@ -195,6 +247,7 @@ def run_control_server(stop_event):
 
             connection.settimeout(SOCKET_TIMEOUT_SECONDS)
             print(f"Control client connected: {client_address}")
+            set_client_connected(True)
             last_packet_time = time.monotonic()
 
             try:
@@ -215,9 +268,14 @@ def run_control_server(stop_event):
 
                     last_packet_time = now
 
+                    try:
+                        pitch_deg, roll_deg, pitch_rad, roll_rad = calculate_orientation_degrees()
+                    except OSError as exc:
+                        print(f"MPU read failed: {exc}")
+                        pitch_deg, roll_deg, pitch_rad, roll_rad = 0.0, 0.0, 0.0, 0.0
+
                     if inputs[12]:
-                        pitch, roll = calculate_orientation()
-                        pitch, roll = pitch / math.pi, roll / math.pi
+                        pitch, roll = pitch_rad / math.pi, roll_rad / math.pi
 
                         inputs[0] = merge_inputs(inputs[0], roll - pitch)
                         inputs[1] = merge_inputs(inputs[1], -roll - pitch)
@@ -229,12 +287,14 @@ def run_control_server(stop_event):
                         inputs[7] = merge_inputs(inputs[7], roll - pitch)
 
                     apply_thrusters(inputs)
+                    update_hud_state(inputs, pitch_deg, roll_deg)
 
             except OSError as exc:
                 print(f"Control connection error: {exc}")
             finally:
                 set_neutral_thrusters()
                 connection.close()
+                set_client_connected(False)
                 print("Control client disconnected. Waiting for reconnect...")
     finally:
         set_neutral_thrusters()
@@ -367,7 +427,10 @@ def generate_frames(cam: Camera):
 
 @app.route("/status")
 def status():
-    return {name: cam.get_status() for name, cam in cameras.items()}
+    return {
+        "cameras": {name: cam.get_status() for name, cam in cameras.items()},
+        "hud": get_hud_state(),
+    }
 
 
 @app.route("/")
@@ -405,17 +468,61 @@ def index():
             .camera-tile.no-signal img {{ display: none; }}
             .camera-tile.no-signal .no-signal-label {{ display: flex; }}
             .hud {{ border: 1px solid #252527; border-radius: 6px; padding: 14px; background: var(--panel-bg); min-height: 0; }}
-            .hud h2 {{ margin: 0 0 8px; font-size: 18px; color: #e7e7ea; }}
-            .hud p {{ margin: 0; color: #9797a1; line-height: 1.4; }}
+            .hud h2 {{ margin: 0 0 10px; font-size: 18px; color: #e7e7ea; }}
+            .hud-grid {{ display: grid; gap: 9px; }}
+            .hud-row {{ display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px dashed #252529; padding-bottom: 6px; }}
+            .hud-label {{ color: #9898a3; font-size: 13px; }}
+            .hud-value {{ color: #f2f2f5; font-weight: 600; font-variant-numeric: tabular-nums; }}
+            .thruster-list {{ list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }}
+            .thruster-item {{ display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }}
+            .thruster-name {{ color: #9898a3; font-size: 12px; min-width: 64px; }}
+            .thruster-bar {{ height: 8px; border-radius: 999px; background: #1f1f22; overflow: hidden; border: 1px solid #2b2b30; }}
+            .thruster-fill {{ height: 100%; width: 50%; background: linear-gradient(90deg, #39c66d, #e9c23f, #e25a5a); transition: width .18s linear; }}
+            .thruster-value {{ color: #dfdfe5; font-size: 12px; min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; }}
+            .connected-yes {{ color: #5ad876; }}
+            .connected-no {{ color: #ff6969; }}
             @media (max-width: 1100px) {{ .layout {{ grid-template-columns: 1fr; }} .camera-column {{ grid-template-columns: 1fr; }} }}
         </style>
 
         <script>
         const previousState = new Map();
+        const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+        const asNumber = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
+        const formatInput = (value) => asNumber(value).toFixed(2);
+        const thrusterPct = (value) => (clamp((asNumber(value) + 1) / 2, 0, 1) * 100);
+
+        function updateHud(hud) {{
+            if (!hud) return;
+
+            const connected = Boolean(hud.client_connected);
+            const connectedEl = document.getElementById("hud-client-connected");
+            connectedEl.textContent = connected ? "Connected" : "Disconnected";
+            connectedEl.classList.toggle("connected-yes", connected);
+            connectedEl.classList.toggle("connected-no", !connected);
+
+            document.getElementById("hud-stabilization").textContent = hud.stabilization_enabled ? "Enabled" : "Disabled";
+            document.getElementById("hud-claw-angle").textContent = formatInput(hud.claw_angle);
+            document.getElementById("hud-claw-rotation").textContent = formatInput(hud.claw_rotation);
+            document.getElementById("hud-syringe-angle").textContent = formatInput(hud.syringe_angle);
+            document.getElementById("hud-camera-angle").textContent = formatInput(hud.camera_angle);
+            document.getElementById("hud-mpu-pitch").textContent = formatInput(hud.mpu_pitch_deg) + "°";
+            document.getElementById("hud-mpu-roll").textContent = formatInput(hud.mpu_roll_deg) + "°";
+
+            const thrusters = Array.isArray(hud.thrusters) ? hud.thrusters : [];
+            for (let i = 0; i < 8; i++) {{
+                const inputValue = thrusters[i] ?? 0;
+                const fill = document.getElementById(`thruster-fill-${{i + 1}}`);
+                const valueEl = document.getElementById(`thruster-value-${{i + 1}}`);
+                fill.style.width = `${{thrusterPct(inputValue)}}%`;
+                valueEl.textContent = formatInput(inputValue);
+            }}
+        }}
+
         async function updateStatus() {{
             const res = await fetch("/status");
             const data = await res.json();
-            for (const [name, details] of Object.entries(data)) {{
+            const cameraData = data.cameras || {{}};
+            for (const [name, details] of Object.entries(cameraData)) {{
                 const tile = document.querySelector(`[data-camera-name="${{name}}"]`);
                 if (!tile) continue;
                 const online = Boolean(details.online);
@@ -428,17 +535,34 @@ def index():
                 }}
                 previousState.set(name, online);
             }}
+
+            updateHud(data.hud);
         }}
         updateStatus();
-        setInterval(updateStatus, 1000);
+        setInterval(updateStatus, {max(50, int(HUD_UPDATE_INTERVAL_SECONDS * 1000))});
         </script>
     </head>
     <body>
         <main class="layout">
             <section class="camera-column">{tiles}</section>
             <aside class="hud">
-                <h2>HUD (Reserved)</h2>
-                <p>Reserved for merged telemetry + controls from new-bottom-side.py.</p>
+                <h2>ROV HUD</h2>
+                <div class="hud-grid">
+                    <div class="hud-row"><span class="hud-label">Client</span><span class="hud-value connected-no" id="hud-client-connected">Disconnected</span></div>
+                    <div class="hud-row"><span class="hud-label">Stabilization</span><span class="hud-value" id="hud-stabilization">Disabled</span></div>
+                    <div class="hud-row"><span class="hud-label">Claw angle</span><span class="hud-value" id="hud-claw-angle">0.00</span></div>
+                    <div class="hud-row"><span class="hud-label">Claw rotation</span><span class="hud-value" id="hud-claw-rotation">0.00</span></div>
+                    <div class="hud-row"><span class="hud-label">Syringe angle</span><span class="hud-value" id="hud-syringe-angle">0.00</span></div>
+                    <div class="hud-row"><span class="hud-label">Camera angle</span><span class="hud-value" id="hud-camera-angle">0.00</span></div>
+                    <div class="hud-row"><span class="hud-label">MPU pitch</span><span class="hud-value" id="hud-mpu-pitch">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">MPU roll</span><span class="hud-value" id="hud-mpu-roll">0.00°</span></div>
+                    <div>
+                        <div class="hud-label" style="margin-bottom: 6px;">Thruster power</div>
+                        <ul class="thruster-list">
+                            {''.join([f'<li class="thruster-item"><span class="thruster-name">Thruster {i}</span><div class="thruster-bar"><div class="thruster-fill" id="thruster-fill-{i}"></div></div><span class="thruster-value" id="thruster-value-{i}">0.00</span></li>' for i in range(1, 9)])}
+                        </ul>
+                    </div>
+                </div>
             </aside>
         </main>
     </body>
