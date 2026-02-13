@@ -64,6 +64,7 @@ class Camera:
         self.fps = max(1, int(config.get("fps", 30)))
         self.frame_interval = 1.0 / self.fps
         self.jpeg_quality = int(config.get("jpeg_quality", 55))
+        self.aspect_ratio = f"{self.width} / {self.height}"
 
         self.cap = None
         self.online = False
@@ -194,7 +195,7 @@ def index():
     for name, cam in cameras.items():
         dom_id = camera_dom_id(name)
         tiles += f"""
-        <article class="camera-tile" id="{dom_id}" data-camera-name="{name}">
+        <article class="camera-tile" id="{dom_id}" data-camera-name="{name}" style="--tile-ratio: {cam.aspect_ratio};">
             <img src="/video/{name}" class="camera-img" alt="{name} feed" loading="lazy">
             <div class="no-signal-label">NO SIGNAL</div>
             <div class="camera-label">{name}</div>
@@ -240,12 +241,13 @@ def index():
                 display: grid;
                 grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: var(--gap);
+                align-content: start;
             }}
 
             .camera-tile {{
                 position: relative;
                 width: 100%;
-                aspect-ratio: 16 / 9;
+                aspect-ratio: var(--tile-ratio, 4 / 3);
                 background: #000;
                 border: 1px solid var(--tile-border);
                 border-radius: 6px;
@@ -256,7 +258,7 @@ def index():
                 width: 100%;
                 height: 100%;
                 display: block;
-                object-fit: contain;
+                object-fit: cover;
                 background: #000;
             }}
 
