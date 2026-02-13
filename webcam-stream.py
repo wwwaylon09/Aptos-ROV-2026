@@ -8,27 +8,70 @@ import os
 
 app = Flask(__name__)
 
+# ---------- Server Configuration ----------
+# Default to 5001 so this can run alongside new-bottom-side.py (port 5000).
+SERVER_HOST = os.getenv("ROV_WEBCAM_HOST", "0.0.0.0")
+SERVER_PORT = int(os.getenv("ROV_WEBCAM_PORT", "5001"))
+
 # ---------- Stable Camera Configuration ----------
+# Keep this structure easy to merge with new-bottom-side.py later.
+# You can tune per-camera width/height/fps/jpeg_quality independently.
 CAMERA_CONFIG = {
-    "Camera 1": "/dev/v4l/by-path/platform-xhci-hcd.1-usb-0:1:1.0-video-index0",
-    "Camera 2": "/dev/v4l/by-path/platform-xhci-hcd.0-usb-0:1:1.0-video-index0",
-    "Camera 3": "/dev/v4l/by-path/platform-xhci-hcd.0-usb-0:2:1.0-video-index0",
-    "Camera 4": "/dev/v4l/by-path/platform-xhci-hcd.1-usb-0:2:1.0-video-index0",
+    "Camera 1": {
+        "device_path": "/dev/v4l/by-path/platform-xhci-hcd.1-usb-0:1:1.0-video-index0",
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+        "jpeg_quality": 55,
+    },
+    "Camera 2": {
+        "device_path": "/dev/v4l/by-path/platform-xhci-hcd.0-usb-0:1:1.0-video-index0",
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+        "jpeg_quality": 55,
+    },
+    "Camera 3": {
+        "device_path": "/dev/v4l/by-path/platform-xhci-hcd.0-usb-0:2:1.0-video-index0",
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+        "jpeg_quality": 55,
+    },
+    "Camera 4": {
+        "device_path": "/dev/v4l/by-path/platform-xhci-hcd.1-usb-0:2:1.0-video-index0",
+        "width": 1920,
+        "height": 1080,
+        "fps": 4,
+        "jpeg_quality": 50,
+    },
 }
 
 RECONNECT_INTERVAL = 3.0
 
 
+def camera_dom_id(name: str) -> str:
+    return "cam-" + "".join(ch.lower() if ch.isalnum() else "-" for ch in name)
+
+
 # ---------- Camera Class ----------
 class Camera:
-    def __init__(self, name, device_path):
+    def __init__(self, name, config):
         self.name = name
-        self.device_path = device_path
+        self.device_path = config["device_path"]
+        self.width = int(config.get("width", 640))
+        self.height = int(config.get("height", 480))
+        self.fps = max(1, int(config.get("fps", 30)))
+        self.frame_interval = 1.0 / self.fps
+        self.jpeg_quality = int(config.get("jpeg_quality", 55))
+
         self.cap = None
-        self.frame = None
         self.online = False
         self.running = True
+
         self.lock = threading.Lock()
+        self.frame = None
+        self.jpeg_bytes = None
 
         threading.Thread(target=self.run, daemon=True).start()
 
@@ -41,8 +84,9 @@ class Camera:
             cap.release()
             return False
 
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        cap.set(cv2.CAP_PROP_FPS, self.fps)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         self.cap = cap
@@ -52,6 +96,7 @@ class Camera:
     def close_camera(self):
         with self.lock:
             self.frame = None
+            self.jpeg_bytes = None
             self.online = False
 
         if self.cap:
@@ -60,11 +105,13 @@ class Camera:
 
     def run(self):
         while self.running:
+            loop_start = time.monotonic()
+
             if self.online and not os.path.exists(self.device_path):
                 self.close_camera()
                 time.sleep(RECONNECT_INTERVAL)
                 continue
-            
+
             if not self.online:
                 if not self.open_camera():
                     time.sleep(RECONNECT_INTERVAL)
@@ -76,25 +123,34 @@ class Camera:
                 time.sleep(0.5)
                 continue
 
+            ok, encoded = cv2.imencode(
+                ".jpg",
+                frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
+            )
+
             with self.lock:
                 self.frame = frame
-                
-            time.sleep(0.03)
+                self.jpeg_bytes = encoded.tobytes() if ok else None
+
+            elapsed = time.monotonic() - loop_start
+            sleep_for = self.frame_interval - elapsed
+            if sleep_for > 0:
+                time.sleep(sleep_for)
 
     def get_jpeg(self):
         if not self.online:
             return None
 
         with self.lock:
-            if self.frame is None:
-                return None
+            return self.jpeg_bytes
 
-            ret, buf = cv2.imencode(
-                ".jpg",
-                self.frame,
-                [int(cv2.IMWRITE_JPEG_QUALITY), 50]
-            )
-            return buf.tobytes() if ret else None
+    def get_status(self):
+        return {
+            "online": self.online,
+            "resolution": f"{self.width}x{self.height}",
+            "fps": self.fps,
+        }
 
     def stop(self):
         self.running = False
@@ -103,8 +159,8 @@ class Camera:
 
 # ---------- Initialize Cameras ----------
 cameras = {
-    name: Camera(name, path)
-    for name, path in CAMERA_CONFIG.items()
+    name: Camera(name, config)
+    for name, config in CAMERA_CONFIG.items()
 }
 
 
@@ -126,7 +182,7 @@ def generate_frames(cam: Camera):
 @app.route("/status")
 def status():
     return {
-        name: cam.online
+        name: cam.get_status()
         for name, cam in cameras.items()
     }
 
@@ -136,81 +192,107 @@ def index():
     tiles = ""
 
     for name, cam in cameras.items():
+        dom_id = camera_dom_id(name)
         tiles += f"""
-        <div class="camera-tile" id="{name}">
-            <img src="/video/{name}" class="camera-img">
+        <article class="camera-tile" id="{dom_id}" data-camera-name="{name}">
+            <img src="/video/{name}" class="camera-img" alt="{name} feed" loading="lazy">
             <div class="no-signal-label">NO SIGNAL</div>
             <div class="camera-label">{name}</div>
-        </div>
+            <div class="camera-meta">{cam.width}x{cam.height} @ {cam.fps} FPS</div>
+        </article>
         """
 
     return render_template_string(f"""
     <html>
     <head>
         <title>ROV Cameras</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
+            :root {{
+                --gap: 8px;
+                --panel-bg: #0f0f10;
+                --tile-border: #2b2b2e;
+                --label-bg: rgba(0,0,0,0.62);
+            }}
+
+            * {{
+                box-sizing: border-box;
+            }}
+
             html, body {{
                 margin: 0;
-                height: 100%;
+                min-height: 100%;
                 background: #111;
-                font-family: sans-serif;
+                color: #ddd;
+                font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
             }}
 
             .layout {{
                 display: grid;
-                grid-template-columns: auto 1fr;
-                height: 100vh;
+                grid-template-columns: minmax(0, 3fr) minmax(250px, 1fr);
+                min-height: 100vh;
+                gap: var(--gap);
+                padding: var(--gap);
             }}
 
             .camera-column {{
-                height: 100vh;
-                box-sizing: border-box;
+                min-height: 0;
                 display: grid;
-                grid-template-columns: repeat(2, 1fr);
-                grid-template-rows: repeat(2, 1fr);
-                gap: 6px;
-                padding: 6px;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: var(--gap);
             }}
 
             .camera-tile {{
                 position: relative;
+                width: 100%;
+                aspect-ratio: 16 / 9;
                 background: #000;
-                border: 1px solid #333;
+                border: 1px solid var(--tile-border);
+                border-radius: 6px;
                 overflow: hidden;
-                height: 100%;
-                aspect-ratio: 4 / 3;
             }}
 
             .camera-img {{
-                height: 100%;
                 width: 100%;
+                height: 100%;
                 display: block;
-                margin: 0 auto;
                 object-fit: contain;
-                background: black;
+                background: #000;
+            }}
+
+            .camera-label,
+            .camera-meta {{
+                position: absolute;
+                left: 8px;
+                font-size: 13px;
+                background: var(--label-bg);
+                color: #f0f0f0;
+                padding: 2px 7px;
+                border-radius: 4px;
+                backdrop-filter: blur(1px);
             }}
 
             .camera-label {{
-                position: absolute;
-                bottom: 6px;
-                left: 6px;
-                font-size: 14px;
-                background: rgba(0,0,0,0.6);
-                color: #eee;
-                padding: 3px 6px;
+                bottom: 34px;
+                font-weight: 600;
+            }}
+
+            .camera-meta {{
+                bottom: 8px;
+                color: #b8b8ba;
             }}
 
             .no-signal-label {{
                 position: absolute;
                 inset: 0;
-                display: flex;
+                display: none;
                 align-items: center;
                 justify-content: center;
-                font-size: 28px;
+                font-size: clamp(18px, 2.8vw, 30px);
                 font-weight: bold;
-                color: red;
-                background: #000;
-                visibility: hidden;
+                letter-spacing: 1px;
+                color: #ff4141;
+                background: rgba(0,0,0,0.76);
             }}
 
             .camera-tile.no-signal img {{
@@ -218,47 +300,81 @@ def index():
             }}
 
             .camera-tile.no-signal .no-signal-label {{
-                visibility: visible;
+                display: flex;
             }}
 
             .hud {{
-                border-left: 2px solid #222;
-                padding: 10px;
-                color: #777;
+                border: 1px solid #252527;
+                border-radius: 6px;
+                padding: 14px;
+                background: var(--panel-bg);
+                min-height: 0;
+            }}
+
+            .hud h2 {{
+                margin: 0 0 8px;
+                font-size: 18px;
+                color: #e7e7ea;
+            }}
+
+            .hud p {{
+                margin: 0;
+                color: #9797a1;
+                line-height: 1.4;
+            }}
+
+            @media (max-width: 1100px) {{
+                .layout {{
+                    grid-template-columns: 1fr;
+                }}
+
+                .camera-column {{
+                    grid-template-columns: 1fr;
+                }}
             }}
         </style>
 
         <script>
+        const previousState = new Map();
+
         async function updateStatus() {{
             const res = await fetch("/status");
             const data = await res.json();
 
-            for (const [name, online] of Object.entries(data)) {{
-                const tile = document.getElementById(name);
+            for (const [name, details] of Object.entries(data)) {{
+                const tile = document.querySelector(`[data-camera-name="${{name}}"]`);
+                if (!tile) continue;
+
+                const online = Boolean(details.online);
+                const wasOnline = previousState.get(name);
+
                 tile.classList.toggle("no-signal", !online);
 
-                // Force reload when coming back online
-                if (online) {{
+                // Reload stream only when transitioning offline -> online.
+                if (online && wasOnline === false) {{
                     const img = tile.querySelector("img");
                     const base = img.src.split("?")[0];
                     img.src = base + "?t=" + Date.now();
                 }}
+
+                previousState.set(name, online);
             }}
         }}
 
+        updateStatus();
         setInterval(updateStatus, 1000);
         </script>
     </head>
     <body>
-        <div class="layout">
-            <div class="camera-column">
+        <main class="layout">
+            <section class="camera-column">
                 {tiles}
-            </div>
-            <div class="hud">
+            </section>
+            <aside class="hud">
                 <h2>HUD (Reserved)</h2>
-                <p>Status, telemetry, controls</p>
-            </div>
-        </div>
+                <p>Reserved for merged telemetry + controls from new-bottom-side.py.</p>
+            </aside>
+        </main>
     </body>
     </html>
     """)
@@ -282,10 +398,11 @@ def shutdown(sig, frame):
         cam.stop()
     sys.exit(0)
 
+
 signal.signal(signal.SIGINT, shutdown)
 signal.signal(signal.SIGTERM, shutdown)
 
 
 # ---------- Run ----------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, threaded=True)
+    app.run(host=SERVER_HOST, port=SERVER_PORT, threaded=True)
