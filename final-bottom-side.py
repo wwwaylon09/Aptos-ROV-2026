@@ -102,6 +102,7 @@ HUD_STATE = {
 
 # ---------------- Control Logic ----------------
 def convert(x):
+    x = clamp(x)
     throttle_multiplier = 0.2
     max_duty_cycle = 5240 + throttle_multiplier * 1640
     min_duty_cycle = 5240 - throttle_multiplier * 1640
@@ -123,6 +124,10 @@ def calculate_orientation_degrees():
 
 def lerp(a, b, t):
     return a + (b - a) * t
+
+
+def clamp(value, low=-1.0, high=1.0):
+    return max(low, min(high, value))
 
 
 
@@ -297,6 +302,9 @@ def run_control_server(stop_event):
                         inputs[5] = merge_inputs(inputs[5], -roll + pitch)
                         inputs[6] = merge_inputs(inputs[6], -roll - pitch)
                         inputs[7] = merge_inputs(inputs[7], roll - pitch)
+
+                    for i in range(8):
+                        inputs[i] = clamp(inputs[i])
 
                     apply_thrusters(inputs)
                     update_hud_state(inputs, pitch_deg, roll_deg)
