@@ -25,6 +25,7 @@ SOCKET_TIMEOUT_SECONDS = 1.0
 MAX_FRAME_SIZE = 65536
 NO_DATA_FAILSAFE_SECONDS = 0.5
 HUD_UPDATE_INTERVAL_SECONDS = float(os.getenv("ROV_HUD_UPDATE_INTERVAL_SECONDS", "0.2"))
+MPU_DEADBAND_DEGREES = float(os.getenv("ROV_MPU_DEADBAND_DEGREES", "1.5"))
 
 # ---------------- Webcam Server Configuration ----------------
 WEBCAM_HOST = os.getenv("ROV_WEBCAM_HOST", "0.0.0.0")
@@ -123,6 +124,13 @@ def calculate_orientation_degrees():
 def lerp(a, b, t):
     return a + (b - a) * t
 
+
+
+
+def apply_deadband(value, threshold):
+    if abs(value) < threshold:
+        return 0.0
+    return value
 
 def merge_inputs(joystick_input, mpu_input):
     if mpu_input < 0:
@@ -275,7 +283,11 @@ def run_control_server(stop_event):
                         pitch_deg, roll_deg, pitch_rad, roll_rad = 0.0, 0.0, 0.0, 0.0
 
                     if inputs[12]:
-                        pitch, roll = pitch_rad / math.pi, roll_rad / math.pi
+                        pitch = pitch_rad / math.pi
+                        roll = roll_rad / math.pi
+
+                        pitch = apply_deadband(pitch, MPU_DEADBAND_DEGREES / 180.0)
+                        roll = apply_deadband(roll, MPU_DEADBAND_DEGREES / 180.0)
 
                         inputs[0] = merge_inputs(inputs[0], roll - pitch)
                         inputs[1] = merge_inputs(inputs[1], -roll - pitch)
@@ -451,7 +463,7 @@ def index():
     return render_template_string(f"""
     <html>
     <head>
-        <title>ROV Cameras</title>
+        <title>ROV Interface</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
             :root {{ --gap: 8px; --panel-bg: #0f0f10; --tile-border: #2b2b2e; --label-bg: rgba(0,0,0,0.62); }}
@@ -481,6 +493,8 @@ def index():
             .thruster-value {{ color: #dfdfe5; font-size: 12px; min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; }}
             .connected-yes {{ color: #5ad876; }}
             .connected-no {{ color: #ff6969; }}
+            .state-enabled {{ color: #5ad876; }}
+            .state-disabled {{ color: #ff6969; }}
             @media (max-width: 1100px) {{ .layout {{ grid-template-columns: 1fr; }} .camera-column {{ grid-template-columns: 1fr; }} }}
         </style>
 
@@ -500,11 +514,15 @@ def index():
             connectedEl.classList.toggle("connected-yes", connected);
             connectedEl.classList.toggle("connected-no", !connected);
 
-            document.getElementById("hud-stabilization").textContent = hud.stabilization_enabled ? "Enabled" : "Disabled";
-            document.getElementById("hud-claw-angle").textContent = formatInput(hud.claw_angle);
-            document.getElementById("hud-claw-rotation").textContent = formatInput(hud.claw_rotation);
-            document.getElementById("hud-syringe-angle").textContent = formatInput(hud.syringe_angle);
-            document.getElementById("hud-camera-angle").textContent = formatInput(hud.camera_angle);
+            const stabilizationEl = document.getElementById("hud-stabilization");
+            const stabilizationEnabled = Boolean(hud.stabilization_enabled);
+            stabilizationEl.textContent = stabilizationEnabled ? "Enabled" : "Disabled";
+            stabilizationEl.classList.toggle("state-enabled", stabilizationEnabled);
+            stabilizationEl.classList.toggle("state-disabled", !stabilizationEnabled);
+            document.getElementById("hud-claw-angle").textContent = formatInput(hud.claw_angle) + "°";
+            document.getElementById("hud-claw-rotation").textContent = formatInput(hud.claw_rotation) + "°";
+            document.getElementById("hud-syringe-angle").textContent = formatInput(hud.syringe_angle) + "°";
+            document.getElementById("hud-camera-angle").textContent = formatInput(hud.camera_angle) + "°";
             document.getElementById("hud-mpu-pitch").textContent = formatInput(hud.mpu_pitch_deg) + "°";
             document.getElementById("hud-mpu-roll").textContent = formatInput(hud.mpu_roll_deg) + "°";
 
@@ -550,10 +568,10 @@ def index():
                 <div class="hud-grid">
                     <div class="hud-row"><span class="hud-label">Client</span><span class="hud-value connected-no" id="hud-client-connected">Disconnected</span></div>
                     <div class="hud-row"><span class="hud-label">Stabilization</span><span class="hud-value" id="hud-stabilization">Disabled</span></div>
-                    <div class="hud-row"><span class="hud-label">Claw angle</span><span class="hud-value" id="hud-claw-angle">0.00</span></div>
-                    <div class="hud-row"><span class="hud-label">Claw rotation</span><span class="hud-value" id="hud-claw-rotation">0.00</span></div>
-                    <div class="hud-row"><span class="hud-label">Syringe angle</span><span class="hud-value" id="hud-syringe-angle">0.00</span></div>
-                    <div class="hud-row"><span class="hud-label">Camera angle</span><span class="hud-value" id="hud-camera-angle">0.00</span></div>
+                    <div class="hud-row"><span class="hud-label">Claw angle</span><span class="hud-value" id="hud-claw-angle">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">Claw rotation</span><span class="hud-value" id="hud-claw-rotation">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">Syringe angle</span><span class="hud-value" id="hud-syringe-angle">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">Camera angle</span><span class="hud-value" id="hud-camera-angle">0.00°</span></div>
                     <div class="hud-row"><span class="hud-label">MPU pitch</span><span class="hud-value" id="hud-mpu-pitch">0.00°</span></div>
                     <div class="hud-row"><span class="hud-label">MPU roll</span><span class="hud-value" id="hud-mpu-roll">0.00°</span></div>
                     <div>
