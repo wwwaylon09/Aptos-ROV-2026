@@ -177,6 +177,9 @@ class YoloOnnxDetector:
         confidences: List[float] = []
         class_ids: List[int] = []
 
+        coord_max = float(np.max(np.abs(arr[:, :4]))) if arr.ndim == 2 and arr.shape[1] >= 4 else 0.0
+        coords_are_normalized = coord_max <= 2.0
+
         for row in arr:
             if row.shape[0] < 6:
                 continue
@@ -213,13 +216,18 @@ class YoloOnnxDetector:
             if conf < self.conf_threshold:
                 continue
 
-            scale_x = frame_w / float(self.input_size)
-            scale_y = frame_h / float(self.input_size)
-
-            x = int((cx - bw / 2.0) * scale_x)
-            y = int((cy - bh / 2.0) * scale_y)
-            w = int(bw * scale_x)
-            h = int(bh * scale_y)
+            if coords_are_normalized:
+                x = int((cx - bw / 2.0) * frame_w)
+                y = int((cy - bh / 2.0) * frame_h)
+                w = int(bw * frame_w)
+                h = int(bh * frame_h)
+            else:
+                scale_x = frame_w / float(self.input_size)
+                scale_y = frame_h / float(self.input_size)
+                x = int((cx - bw / 2.0) * scale_x)
+                y = int((cy - bh / 2.0) * scale_y)
+                w = int(bw * scale_x)
+                h = int(bh * scale_y)
 
             x = max(0, min(frame_w - 1, x))
             y = max(0, min(frame_h - 1, y))
