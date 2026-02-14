@@ -259,6 +259,52 @@ def run_worker(args: argparse.Namespace) -> None:
             infer_t0 = time.perf_counter()
             detections = detector.infer(packet.frame_bgr)
             infer_ms = (time.perf_counter() - infer_t0) * 1000.0
+            filtered_detections = [det for det in detections if det.confidence >= args.conf_threshold]
+            count = len(filtered_detections)
+
+            frame_vis = packet.frame_bgr.copy()
+            for det in filtered_detections:
+                x1, y1, x2, y2 = det.bbox_xyxy
+                cv2.rectangle(frame_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = f"{det.class_id} {det.confidence:.2f}"
+                text_y = y1 - 8 if y1 > 16 else y1 + 18
+                cv2.putText(
+                    frame_vis,
+                    label,
+                    (x1, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+            cv2.putText(
+                frame_vis,
+                f"{args.count_label}: {count}",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (0, 255, 0),
+                2,
+                cv2.LINE_AA,
+            )
+
+            if args.show_preview:
+                if args.preview_scale != 1.0:
+                    frame_vis = cv2.resize(
+                        frame_vis,
+                        dsize=None,
+                        fx=args.preview_scale,
+                        fy=args.preview_scale,
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+
+                cv2.imshow("ROV CV Worker", frame_vis)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (27, ord("q")):
+                    print("[worker] preview exit requested, stopping...")
+                    break
 
             frame_count += 1
             elapsed = time.monotonic() - fps_window_start
@@ -276,14 +322,17 @@ def run_worker(args: argparse.Namespace) -> None:
                         "confidence": round(det.confidence, 4),
                         "bbox_xyxy": list(det.bbox_xyxy),
                     }
-                    for det in detections
+                    for det in filtered_detections
                 ],
+                "count": count,
             }
             print(json.dumps(result, separators=(",", ":")))
     except KeyboardInterrupt:
         print("\n[worker] interrupted, stopping...")
     finally:
         reader.stop()
+        if args.show_preview:
+            cv2.destroyAllWindows()
 
 
 def parse_args() -> argparse.Namespace:
@@ -294,6 +343,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nms-threshold", type=float, default=0.45, help="NMS IoU threshold")
     parser.add_argument("--input-size", type=int, default=640, help="Square detector input size")
     parser.add_argument("--stream-timeout", type=float, default=5.0, help="MJPEG socket read timeout (seconds)")
+    parser.add_argument("--show-preview", action="store_true", help="Show an annotated OpenCV preview window")
+    parser.add_argument("--preview-scale", type=float, default=1.0, help="Display scale factor for preview window")
+    parser.add_argument("--count-label", default="Green crabs", help="Summary label text shown in preview overlay")
     return parser.parse_args()
 
 
