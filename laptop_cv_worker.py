@@ -146,21 +146,39 @@ class YoloOnnxDetector:
         self.net.setInput(blob)
         pred = self.net.forward()
 
-        return self._postprocess(pred, frame_w=w, frame_h=h)
+        has_objectness: Optional[bool] = None
+        non_batch_dims = [int(d) for d in pred.shape if int(d) != 1]
+        if len(non_batch_dims) == 2:
+            feature_dim = min(non_batch_dims)
+            if feature_dim == 84:  # YOLOv8 style: [cx, cy, w, h, class_scores...]
+                has_objectness = False
+            elif feature_dim == 85:  # YOLOv5/7 style: [cx, cy, w, h, obj, class_scores...]
+                has_objectness = True
 
-    def _postprocess(self, pred: np.ndarray, frame_w: int, frame_h: int) -> List[Detection]:
-        # Common YOLO ONNX outputs are often [1, N, 5+nc] or [1, 5+nc, N].
+        return self._postprocess(pred, frame_w=w, frame_h=h, has_objectness=has_objectness)
+
+    def _postprocess(
+        self,
+        pred: np.ndarray,
+        frame_w: int,
+        frame_h: int,
+        has_objectness: Optional[bool] = None,
+    ) -> List[Detection]:
+        # Common YOLO ONNX outputs are often [1, N, 5+nc], [1, 5+nc, N], [1, N, 4+nc], or [1, 4+nc, N].
         arr = np.squeeze(pred)
 
         if arr.ndim == 1:
             arr = np.expand_dims(arr, axis=0)
 
-        if arr.ndim == 2 and arr.shape[0] < arr.shape[1] and arr.shape[0] <= 8:
+        if arr.ndim == 2 and arr.shape[0] < arr.shape[1] and arr.shape[0] <= 256:
             arr = arr.T
 
         boxes_xywh: List[List[float]] = []
         confidences: List[float] = []
         class_ids: List[int] = []
+
+        coord_max = float(np.max(np.abs(arr[:, :4]))) if arr.ndim == 2 and arr.shape[1] >= 4 else 0.0
+        coords_are_normalized = coord_max <= 2.0
 
         for row in arr:
             if row.shape[0] < 6:
@@ -179,24 +197,37 @@ class YoloOnnxDetector:
                 class_ids.append(int(class_id))
                 continue
 
-            cx, cy, bw, bh, obj = row[:5]
-            if obj < 1e-6:
-                continue
+            cx, cy, bw, bh = row[:4]
 
-            class_scores = row[5:]
-            class_id = int(np.argmax(class_scores))
-            cls_conf = float(class_scores[class_id])
-            conf = float(obj * cls_conf)
+            if has_objectness is True:
+                obj = float(row[4])
+                if obj < 1e-6:
+                    continue
+
+                class_scores = row[5:]
+                class_id = int(np.argmax(class_scores))
+                cls_conf = float(class_scores[class_id])
+                conf = float(obj * cls_conf)
+            else:
+                class_scores = row[4:]
+                class_id = int(np.argmax(class_scores))
+                conf = float(class_scores[class_id])
+
             if conf < self.conf_threshold:
                 continue
 
-            scale_x = frame_w / float(self.input_size)
-            scale_y = frame_h / float(self.input_size)
-
-            x = int((cx - bw / 2.0) * scale_x)
-            y = int((cy - bh / 2.0) * scale_y)
-            w = int(bw * scale_x)
-            h = int(bh * scale_y)
+            if coords_are_normalized:
+                x = int((cx - bw / 2.0) * frame_w)
+                y = int((cy - bh / 2.0) * frame_h)
+                w = int(bw * frame_w)
+                h = int(bh * frame_h)
+            else:
+                scale_x = frame_w / float(self.input_size)
+                scale_y = frame_h / float(self.input_size)
+                x = int((cx - bw / 2.0) * scale_x)
+                y = int((cy - bh / 2.0) * scale_y)
+                w = int(bw * scale_x)
+                h = int(bh * scale_y)
 
             x = max(0, min(frame_w - 1, x))
             y = max(0, min(frame_h - 1, y))
@@ -259,6 +290,52 @@ def run_worker(args: argparse.Namespace) -> None:
             infer_t0 = time.perf_counter()
             detections = detector.infer(packet.frame_bgr)
             infer_ms = (time.perf_counter() - infer_t0) * 1000.0
+            filtered_detections = [det for det in detections if det.confidence >= args.conf_threshold]
+            count = len(filtered_detections)
+
+            frame_vis = packet.frame_bgr.copy()
+            for det in filtered_detections:
+                x1, y1, x2, y2 = det.bbox_xyxy
+                cv2.rectangle(frame_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = f"{det.class_id} {det.confidence:.2f}"
+                text_y = y1 - 8 if y1 > 16 else y1 + 18
+                cv2.putText(
+                    frame_vis,
+                    label,
+                    (x1, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+            cv2.putText(
+                frame_vis,
+                f"{args.count_label}: {count}",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (0, 255, 0),
+                2,
+                cv2.LINE_AA,
+            )
+
+            if args.show_preview:
+                if args.preview_scale != 1.0:
+                    frame_vis = cv2.resize(
+                        frame_vis,
+                        dsize=None,
+                        fx=args.preview_scale,
+                        fy=args.preview_scale,
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+
+                cv2.imshow("ROV CV Worker", frame_vis)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (27, ord("q")):
+                    print("[worker] preview exit requested, stopping...")
+                    break
 
             frame_count += 1
             elapsed = time.monotonic() - fps_window_start
@@ -276,14 +353,17 @@ def run_worker(args: argparse.Namespace) -> None:
                         "confidence": round(det.confidence, 4),
                         "bbox_xyxy": list(det.bbox_xyxy),
                     }
-                    for det in detections
+                    for det in filtered_detections
                 ],
+                "count": count,
             }
             print(json.dumps(result, separators=(",", ":")))
     except KeyboardInterrupt:
         print("\n[worker] interrupted, stopping...")
     finally:
         reader.stop()
+        if args.show_preview:
+            cv2.destroyAllWindows()
 
 
 def parse_args() -> argparse.Namespace:
@@ -294,6 +374,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nms-threshold", type=float, default=0.45, help="NMS IoU threshold")
     parser.add_argument("--input-size", type=int, default=640, help="Square detector input size")
     parser.add_argument("--stream-timeout", type=float, default=5.0, help="MJPEG socket read timeout (seconds)")
+    parser.add_argument("--show-preview", action="store_true", help="Show an annotated OpenCV preview window")
+    parser.add_argument("--preview-scale", type=float, default=1.0, help="Display scale factor for preview window")
+    parser.add_argument("--count-label", default="Green crabs", help="Summary label text shown in preview overlay")
     return parser.parse_args()
 
 
