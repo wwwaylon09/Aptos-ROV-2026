@@ -180,6 +180,13 @@ class YoloOnnxDetector:
         coord_max = float(np.max(np.abs(arr[:, :4]))) if arr.ndim == 2 and arr.shape[1] >= 4 else 0.0
         coords_are_normalized = coord_max <= 2.0
 
+        def _clamp_box(x: int, y: int, w: int, h: int) -> Tuple[int, int, int, int]:
+            x = max(0, min(frame_w - 1, int(x)))
+            y = max(0, min(frame_h - 1, int(y)))
+            w = max(1, min(frame_w - x, int(w)))
+            h = max(1, min(frame_h - y, int(h)))
+            return x, y, w, h
+
         for row in arr:
             if row.shape[0] < 6:
                 continue
@@ -188,16 +195,18 @@ class YoloOnnxDetector:
                 x1, y1, x2, y2, conf, class_id = row.tolist()
                 if conf < self.conf_threshold:
                     continue
-                x = max(0, min(frame_w - 1, int(x1)))
-                y = max(0, min(frame_h - 1, int(y1)))
-                w = max(1, min(frame_w - x, int(x2 - x1)))
-                h = max(1, min(frame_h - y, int(y2 - y1)))
+                if coords_are_normalized:
+                    x1 *= frame_w
+                    x2 *= frame_w
+                    y1 *= frame_h
+                    y2 *= frame_h
+                x, y, w, h = _clamp_box(int(x1), int(y1), int(x2 - x1), int(y2 - y1))
                 boxes_xywh.append([x, y, w, h])
                 confidences.append(float(conf))
                 class_ids.append(int(class_id))
                 continue
 
-            cx, cy, bw, bh = row[:4]
+            b0, b1, b2, b3 = [float(v) for v in row[:4]]
 
             if has_objectness is True:
                 obj = float(row[4])
@@ -216,23 +225,23 @@ class YoloOnnxDetector:
             if conf < self.conf_threshold:
                 continue
 
-            if coords_are_normalized:
-                x = int((cx - bw / 2.0) * frame_w)
-                y = int((cy - bh / 2.0) * frame_h)
-                w = int(bw * frame_w)
-                h = int(bh * frame_h)
-            else:
-                scale_x = frame_w / float(self.input_size)
-                scale_y = frame_h / float(self.input_size)
-                x = int((cx - bw / 2.0) * scale_x)
-                y = int((cy - bh / 2.0) * scale_y)
-                w = int(bw * scale_x)
-                h = int(bh * scale_y)
+            scale_x = frame_w / float(self.input_size)
+            scale_y = frame_h / float(self.input_size)
 
-            x = max(0, min(frame_w - 1, x))
-            y = max(0, min(frame_h - 1, y))
-            w = max(1, min(frame_w - x, w))
-            h = max(1, min(frame_h - y, h))
+            if coords_are_normalized:
+                candidates = [
+                    _clamp_box(int((b0 - b2 / 2.0) * frame_w), int((b1 - b3 / 2.0) * frame_h), int(b2 * frame_w), int(b3 * frame_h)),
+                    _clamp_box(int(b0 * frame_w), int(b1 * frame_h), int((b2 - b0) * frame_w), int((b3 - b1) * frame_h)),
+                    _clamp_box(int(b0 * frame_w), int(b1 * frame_h), int(b2 * frame_w), int(b3 * frame_h)),
+                ]
+            else:
+                candidates = [
+                    _clamp_box(int((b0 - b2 / 2.0) * scale_x), int((b1 - b3 / 2.0) * scale_y), int(b2 * scale_x), int(b3 * scale_y)),
+                    _clamp_box(int(b0 * scale_x), int(b1 * scale_y), int((b2 - b0) * scale_x), int((b3 - b1) * scale_y)),
+                    _clamp_box(int(b0 * scale_x), int(b1 * scale_y), int(b2 * scale_x), int(b3 * scale_y)),
+                ]
+
+            x, y, w, h = max(candidates, key=lambda box: box[2] * box[3])
 
             boxes_xywh.append([x, y, w, h])
             confidences.append(conf)
