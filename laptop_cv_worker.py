@@ -146,16 +146,31 @@ class YoloOnnxDetector:
         self.net.setInput(blob)
         pred = self.net.forward()
 
-        return self._postprocess(pred, frame_w=w, frame_h=h)
+        has_objectness: Optional[bool] = None
+        non_batch_dims = [int(d) for d in pred.shape if int(d) != 1]
+        if len(non_batch_dims) == 2:
+            feature_dim = min(non_batch_dims)
+            if feature_dim == 84:  # YOLOv8 style: [cx, cy, w, h, class_scores...]
+                has_objectness = False
+            elif feature_dim == 85:  # YOLOv5/7 style: [cx, cy, w, h, obj, class_scores...]
+                has_objectness = True
 
-    def _postprocess(self, pred: np.ndarray, frame_w: int, frame_h: int) -> List[Detection]:
-        # Common YOLO ONNX outputs are often [1, N, 5+nc] or [1, 5+nc, N].
+        return self._postprocess(pred, frame_w=w, frame_h=h, has_objectness=has_objectness)
+
+    def _postprocess(
+        self,
+        pred: np.ndarray,
+        frame_w: int,
+        frame_h: int,
+        has_objectness: Optional[bool] = None,
+    ) -> List[Detection]:
+        # Common YOLO ONNX outputs are often [1, N, 5+nc], [1, 5+nc, N], [1, N, 4+nc], or [1, 4+nc, N].
         arr = np.squeeze(pred)
 
         if arr.ndim == 1:
             arr = np.expand_dims(arr, axis=0)
 
-        if arr.ndim == 2 and arr.shape[0] < arr.shape[1] and arr.shape[0] <= 8:
+        if arr.ndim == 2 and arr.shape[0] < arr.shape[1] and arr.shape[0] <= 256:
             arr = arr.T
 
         boxes_xywh: List[List[float]] = []
@@ -179,14 +194,22 @@ class YoloOnnxDetector:
                 class_ids.append(int(class_id))
                 continue
 
-            cx, cy, bw, bh, obj = row[:5]
-            if obj < 1e-6:
-                continue
+            cx, cy, bw, bh = row[:4]
 
-            class_scores = row[5:]
-            class_id = int(np.argmax(class_scores))
-            cls_conf = float(class_scores[class_id])
-            conf = float(obj * cls_conf)
+            if has_objectness is True:
+                obj = float(row[4])
+                if obj < 1e-6:
+                    continue
+
+                class_scores = row[5:]
+                class_id = int(np.argmax(class_scores))
+                cls_conf = float(class_scores[class_id])
+                conf = float(obj * cls_conf)
+            else:
+                class_scores = row[4:]
+                class_id = int(np.argmax(class_scores))
+                conf = float(class_scores[class_id])
+
             if conf < self.conf_threshold:
                 continue
 
