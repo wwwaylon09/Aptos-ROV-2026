@@ -21,7 +21,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.request import Request, urlopen
 
 import cv2
@@ -37,6 +37,12 @@ except ImportError:
 MJPEG_URL = "http://192.168.42.42:5001/video/Camera%201"
 MODEL_PATH = "crab_detection_v1.onnx"
 MODEL_NUM_CLASSES = 3
+CLASS_NAMES: Sequence[str] = (
+    # Update with your model's species labels in class-index order.
+    "green_crab",
+    "dungeness_crab",
+    "rock_crab",
+)
 DETECTOR_BACKEND = "auto"  # one of: "auto", "opencv", "onnxruntime"
 CONF_THRESHOLD = 0.3
 NMS_THRESHOLD = 0.45
@@ -70,6 +76,7 @@ def resolve_model_path(model_path: str) -> Path:
 @dataclass
 class Detection:
     class_id: int
+    class_name: str
     confidence: float
     bbox_xyxy: Tuple[int, int, int, int]
 
@@ -168,12 +175,16 @@ class YoloOnnxDetector:
         input_size: int,
         num_classes: Optional[int] = None,
         backend: str = "auto",
+        class_names: Optional[Sequence[str]] = None,
     ) -> None:
         self.model_path = model_path
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size
         self.num_classes = num_classes
+        self.class_name_by_id: Dict[int, str] = {
+            idx: name for idx, name in enumerate(class_names or [])
+        }
 
         if backend not in ("auto", "opencv", "onnxruntime"):
             raise ValueError(f"Unsupported backend {backend!r}; expected auto/opencv/onnxruntime")
@@ -404,6 +415,7 @@ class YoloOnnxDetector:
             detections.append(
                 Detection(
                     class_id=class_ids[idx],
+                    class_name=self.class_name_by_id.get(class_ids[idx], str(class_ids[idx])),
                     confidence=float(confidences[idx]),
                     bbox_xyxy=(int(x), int(y), int(x + w), int(y + h)),
                 )
@@ -422,6 +434,11 @@ def run_worker() -> None:
 
     frame_buffer = LatestFrameBuffer()
     reader = MjpegReaderThread(MJPEG_URL, frame_buffer, timeout_s=STREAM_TIMEOUT_S)
+    if CLASS_NAMES and MODEL_NUM_CLASSES != len(CLASS_NAMES):
+        print(
+            "[worker] warning: MODEL_NUM_CLASSES does not match len(CLASS_NAMES): "
+            f"{MODEL_NUM_CLASSES} != {len(CLASS_NAMES)}"
+        )
     detector = YoloOnnxDetector(
         model_path=str(resolved_model_path),
         conf_threshold=CONF_THRESHOLD,
@@ -429,6 +446,7 @@ def run_worker() -> None:
         input_size=INPUT_SIZE,
         num_classes=MODEL_NUM_CLASSES,
         backend=DETECTOR_BACKEND,
+        class_names=CLASS_NAMES,
     )
 
     reader.start()
@@ -458,7 +476,7 @@ def run_worker() -> None:
             for det in filtered_detections:
                 x1, y1, x2, y2 = det.bbox_xyxy
                 cv2.rectangle(frame_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                label = f"{det.class_id} {det.confidence:.2f}"
+                label = f"{det.class_name} {det.confidence:.2f}"
                 text_y = y1 - 8 if y1 > 16 else y1 + 18
                 cv2.putText(
                     frame_vis,
@@ -511,6 +529,7 @@ def run_worker() -> None:
                 "detections": [
                     {
                         "class_id": det.class_id,
+                        "class_name": det.class_name,
                         "confidence": round(det.confidence, 4),
                         "bbox_xyxy": list(det.bbox_xyxy),
                     }
