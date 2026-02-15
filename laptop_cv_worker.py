@@ -26,10 +26,17 @@ from urllib.request import Request, urlopen
 import cv2
 import numpy as np
 
+try:
+    import onnxruntime
+except ImportError:
+    onnxruntime = None
+
 
 # Worker configuration
 MJPEG_URL = "http://192.168.42.42:5001/video/Camera%201"
-MODEL_PATH = "/path/to/yolov8n.onnx"
+MODEL_PATH = "crab_detection_v1.onnx"
+MODEL_NUM_CLASSES = 3
+DETECTOR_BACKEND = "auto"  # one of: "auto", "opencv", "onnxruntime"
 CONF_THRESHOLD = 0.3
 NMS_THRESHOLD = 0.45
 INPUT_SIZE = 640
@@ -150,7 +157,7 @@ class MjpegReaderThread(threading.Thread):
 
 
 class YoloOnnxDetector:
-    """Lightweight YOLO ONNX detector using OpenCV DNN."""
+    """YOLO ONNX detector with OpenCV DNN + ONNX Runtime fallback."""
 
     def __init__(
         self,
@@ -158,13 +165,68 @@ class YoloOnnxDetector:
         conf_threshold: float,
         nms_threshold: float,
         input_size: int,
+        num_classes: Optional[int] = None,
+        backend: str = "auto",
     ) -> None:
-        self.net = cv2.dnn.readNetFromONNX(model_path)
+        self.model_path = model_path
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size
+        self.num_classes = num_classes
+
+        if backend not in ("auto", "opencv", "onnxruntime"):
+            raise ValueError(f"Unsupported backend {backend!r}; expected auto/opencv/onnxruntime")
+
+        self.backend_preference = backend
+        self.active_backend = "opencv" if backend in ("auto", "opencv") else "onnxruntime"
+        self.net: Optional[cv2.dnn.Net] = None
+        self.ort_session = None
+        self.ort_input_name: Optional[str] = None
+
+        if self.active_backend == "opencv":
+            self.net = cv2.dnn.readNetFromONNX(model_path)
+        else:
+            self._init_onnxruntime()
+
+    def _init_onnxruntime(self) -> None:
+        if onnxruntime is None:
+            raise RuntimeError(
+                "onnxruntime is not installed. Install it with: pip install onnxruntime"
+            )
+
+        self.ort_session = onnxruntime.InferenceSession(
+            self.model_path,
+            providers=["CPUExecutionProvider"],
+        )
+        self.ort_input_name = self.ort_session.get_inputs()[0].name
+
+    def _looks_like_opencv_reshape_error(self, exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return "reshape" in msg and "computeshapebyreshapemask" in msg
 
     def infer(self, frame_bgr: np.ndarray) -> List[Detection]:
+        if self.active_backend == "onnxruntime":
+            return self._infer_onnxruntime(frame_bgr)
+
+        try:
+            return self._infer_opencv(frame_bgr)
+        except cv2.error as exc:
+            should_fallback = (
+                self.backend_preference == "auto"
+                and self._looks_like_opencv_reshape_error(exc)
+            )
+            if not should_fallback:
+                raise
+
+            print("[detector] OpenCV DNN failed with reshape error; switching to onnxruntime backend")
+            self._init_onnxruntime()
+            self.active_backend = "onnxruntime"
+            return self._infer_onnxruntime(frame_bgr)
+
+    def _infer_opencv(self, frame_bgr: np.ndarray) -> List[Detection]:
+        if self.net is None:
+            raise RuntimeError("OpenCV DNN backend is not initialized")
+
         h, w = frame_bgr.shape[:2]
 
         blob = cv2.dnn.blobFromImage(
@@ -177,16 +239,48 @@ class YoloOnnxDetector:
         self.net.setInput(blob)
         pred = self.net.forward()
 
+        if isinstance(pred, (list, tuple)):
+            if not pred:
+                return []
+            if len(pred) > 1:
+                print(f"[detector] model returned {len(pred)} outputs; using the first output tensor")
+            pred = pred[0]
+
+        has_objectness = self._infer_objectness_layout(pred)
+        return self._postprocess(pred, frame_w=w, frame_h=h, has_objectness=has_objectness)
+
+    def _infer_onnxruntime(self, frame_bgr: np.ndarray) -> List[Detection]:
+        if self.ort_session is None or self.ort_input_name is None:
+            raise RuntimeError("onnxruntime backend is not initialized")
+
+        h, w = frame_bgr.shape[:2]
+        resized = cv2.resize(frame_bgr, (self.input_size, self.input_size), interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        blob = np.transpose(rgb, (2, 0, 1)).astype(np.float32) / 255.0
+        blob = np.expand_dims(blob, axis=0)
+
+        outputs = self.ort_session.run(None, {self.ort_input_name: blob})
+        if not outputs:
+            return []
+
+        pred = outputs[0]
+        has_objectness = self._infer_objectness_layout(pred)
+        return self._postprocess(pred, frame_w=w, frame_h=h, has_objectness=has_objectness)
+
+    def _infer_objectness_layout(self, pred: np.ndarray) -> Optional[bool]:
         has_objectness: Optional[bool] = None
         non_batch_dims = [int(d) for d in pred.shape if int(d) != 1]
         if len(non_batch_dims) == 2:
             feature_dim = min(non_batch_dims)
-            if feature_dim == 84:  # YOLOv8 style: [cx, cy, w, h, class_scores...]
+            if self.num_classes is not None and feature_dim == self.num_classes + 4:
+                has_objectness = False
+            elif self.num_classes is not None and feature_dim == self.num_classes + 5:
+                has_objectness = True
+            elif feature_dim == 84:  # YOLOv8 style: [cx, cy, w, h, class_scores...]
                 has_objectness = False
             elif feature_dim == 85:  # YOLOv5/7 style: [cx, cy, w, h, obj, class_scores...]
                 has_objectness = True
-
-        return self._postprocess(pred, frame_w=w, frame_h=h, has_objectness=has_objectness)
+        return has_objectness
 
     def _postprocess(
         self,
@@ -315,6 +409,8 @@ def run_worker() -> None:
         conf_threshold=CONF_THRESHOLD,
         nms_threshold=NMS_THRESHOLD,
         input_size=INPUT_SIZE,
+        num_classes=MODEL_NUM_CLASSES,
+        backend=DETECTOR_BACKEND,
     )
 
     reader.start()
