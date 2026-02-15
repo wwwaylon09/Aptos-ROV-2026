@@ -7,16 +7,15 @@ Responsibilities:
 - Run lightweight object detection (YOLO ONNX via OpenCV DNN).
 - Emit detection results with per-frame performance metrics.
 
-Example:
-    python laptop_cv_worker.py \
-      --mjpeg-url http://192.168.42.42:5001/video/Camera%201 \
-      --model /path/to/yolov8n.onnx \
-      --conf-threshold 0.35
+Configuration:
+    Edit the constants near the top of this file (for example: MJPEG_URL,
+    MODEL_PATH, and SHOW_PREVIEW), then run:
+
+    python laptop_cv_worker.py
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import threading
 import time
@@ -26,6 +25,21 @@ from urllib.request import Request, urlopen
 
 import cv2
 import numpy as np
+
+
+
+# =========================
+# Editable runtime settings
+# =========================
+MJPEG_URL = "http://192.168.42.42:5001/video/Camera%201"
+MODEL_PATH = "yolov8n.onnx"
+CONF_THRESHOLD = 0.3
+NMS_THRESHOLD = 0.45
+INPUT_SIZE = 640
+STREAM_TIMEOUT = 5.0
+SHOW_PREVIEW = False
+PREVIEW_SCALE = 1.0
+COUNT_LABEL = "Green crabs"
 
 
 @dataclass
@@ -132,6 +146,9 @@ class YoloOnnxDetector:
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size
+        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        print("[worker] using CPU backend/target")
 
     def infer(self, frame_bgr: np.ndarray) -> List[Detection]:
         h, w = frame_bgr.shape[:2]
@@ -269,18 +286,23 @@ class YoloOnnxDetector:
         return detections
 
 
-def run_worker(args: argparse.Namespace) -> None:
+def run_worker() -> None:
+    if not MJPEG_URL:
+        raise ValueError("Set MJPEG_URL to your camera stream URL")
+    if not MODEL_PATH:
+        raise ValueError("Set MODEL_PATH to your ONNX model path")
+
     frame_buffer = LatestFrameBuffer()
-    reader = MjpegReaderThread(args.mjpeg_url, frame_buffer, timeout_s=args.stream_timeout)
+    reader = MjpegReaderThread(MJPEG_URL, frame_buffer, timeout_s=STREAM_TIMEOUT)
     detector = YoloOnnxDetector(
-        model_path=args.model,
-        conf_threshold=args.conf_threshold,
-        nms_threshold=args.nms_threshold,
-        input_size=args.input_size,
+        model_path=MODEL_PATH,
+        conf_threshold=CONF_THRESHOLD,
+        nms_threshold=NMS_THRESHOLD,
+        input_size=INPUT_SIZE,
     )
 
     reader.start()
-    print(f"[worker] connected reader thread for: {args.mjpeg_url}")
+    print(f"[worker] connected reader thread for: {MJPEG_URL}")
 
     last_processed_id = 0
     frame_count = 0
@@ -299,7 +321,7 @@ def run_worker(args: argparse.Namespace) -> None:
             infer_t0 = time.perf_counter()
             detections = detector.infer(packet.frame_bgr)
             infer_ms = (time.perf_counter() - infer_t0) * 1000.0
-            filtered_detections = [det for det in detections if det.confidence >= args.conf_threshold]
+            filtered_detections = [det for det in detections if det.confidence >= CONF_THRESHOLD]
             count = len(filtered_detections)
 
             frame_vis = packet.frame_bgr.copy()
@@ -321,7 +343,7 @@ def run_worker(args: argparse.Namespace) -> None:
 
             cv2.putText(
                 frame_vis,
-                f"{args.count_label}: {count}",
+                f"{COUNT_LABEL}: {count}",
                 (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.9,
@@ -330,13 +352,13 @@ def run_worker(args: argparse.Namespace) -> None:
                 cv2.LINE_AA,
             )
 
-            if args.show_preview:
-                if args.preview_scale != 1.0:
+            if SHOW_PREVIEW:
+                if PREVIEW_SCALE != 1.0:
                     frame_vis = cv2.resize(
                         frame_vis,
                         dsize=None,
-                        fx=args.preview_scale,
-                        fy=args.preview_scale,
+                        fx=PREVIEW_SCALE,
+                        fy=PREVIEW_SCALE,
                         interpolation=cv2.INTER_LINEAR,
                     )
 
@@ -371,23 +393,9 @@ def run_worker(args: argparse.Namespace) -> None:
         print("\n[worker] interrupted, stopping...")
     finally:
         reader.stop()
-        if args.show_preview:
+        if SHOW_PREVIEW:
             cv2.destroyAllWindows()
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Laptop-side MJPEG CV worker")
-    parser.add_argument("--mjpeg-url", required=True, help="MJPEG URL (e.g. http://<pi>:5001/video/Camera%201)")
-    parser.add_argument("--model", required=True, help="Path to lightweight ONNX detector model")
-    parser.add_argument("--conf-threshold", type=float, default=0.3, help="Detection confidence threshold")
-    parser.add_argument("--nms-threshold", type=float, default=0.45, help="NMS IoU threshold")
-    parser.add_argument("--input-size", type=int, default=640, help="Square detector input size")
-    parser.add_argument("--stream-timeout", type=float, default=5.0, help="MJPEG socket read timeout (seconds)")
-    parser.add_argument("--show-preview", action="store_true", help="Show an annotated OpenCV preview window")
-    parser.add_argument("--preview-scale", type=float, default=1.0, help="Display scale factor for preview window")
-    parser.add_argument("--count-label", default="Green crabs", help="Summary label text shown in preview overlay")
-    return parser.parse_args()
-
-
 if __name__ == "__main__":
-    run_worker(parse_args())
+    run_worker()
