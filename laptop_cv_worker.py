@@ -27,8 +27,10 @@ from urllib.request import Request, urlopen
 import cv2
 import numpy as np
 
-_ort_spec = importlib.util.find_spec("onnxruntime")
-onnxruntime = importlib.import_module("onnxruntime") if _ort_spec else None
+try:
+    import onnxruntime
+except ImportError:
+    onnxruntime = None
 
 
 # Worker configuration
