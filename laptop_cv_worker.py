@@ -15,9 +15,11 @@ Example:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.request import Request, urlopen
 
@@ -35,6 +37,26 @@ STREAM_TIMEOUT_S = 5.0
 SHOW_PREVIEW = False
 PREVIEW_SCALE = 1.0
 COUNT_LABEL = "Green crabs"
+
+
+def resolve_model_path(model_path: str) -> Path:
+    """Resolve model path across Windows/WSL/POSIX environments."""
+
+    raw_path = model_path.strip().strip('"').strip("'")
+    expanded = os.path.expandvars(os.path.expanduser(raw_path))
+    path = Path(expanded)
+
+    if path.exists():
+        return path
+
+    if os.name != "nt" and len(expanded) >= 3 and expanded[1] == ":" and expanded[2] in ("\\", "/"):
+        drive = expanded[0].lower()
+        tail = expanded[3:].replace("\\", "/")
+        wsl_path = Path(f"/mnt/{drive}/{tail}")
+        if wsl_path.exists():
+            return wsl_path
+
+    return path
 
 
 @dataclass
@@ -279,10 +301,17 @@ class YoloOnnxDetector:
 
 
 def run_worker() -> None:
+    resolved_model_path = resolve_model_path(MODEL_PATH)
+    if not resolved_model_path.exists():
+        raise FileNotFoundError(
+            "Model file not found. "
+            f"Configured MODEL_PATH={MODEL_PATH!r}, resolved path={str(resolved_model_path)!r}."
+        )
+
     frame_buffer = LatestFrameBuffer()
     reader = MjpegReaderThread(MJPEG_URL, frame_buffer, timeout_s=STREAM_TIMEOUT_S)
     detector = YoloOnnxDetector(
-        model_path=MODEL_PATH,
+        model_path=str(resolved_model_path),
         conf_threshold=CONF_THRESHOLD,
         nms_threshold=NMS_THRESHOLD,
         input_size=INPUT_SIZE,
