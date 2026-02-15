@@ -35,22 +35,22 @@ except ImportError:
 
 # Worker configuration
 MJPEG_URL = "http://192.168.42.42:5001/video/Camera%201"
-MODEL_PATH = "crab_detection_v1.onnx"
+MODEL_PATH = "crab_detection_v2.onnx"
 MODEL_NUM_CLASSES = 3
 CLASS_NAMES: Sequence[str] = (
     # Update with your model's species labels in class-index order.
-    "green_crab",
-    "dungeness_crab",
-    "rock_crab",
+    "Green",
+    "Jonah",
+    "Rock",
 )
 DETECTOR_BACKEND = "auto"  # one of: "auto", "opencv", "onnxruntime"
-CONF_THRESHOLD = 0.3
+CONF_THRESHOLD = 0.5
 NMS_THRESHOLD = 0.45
 INPUT_SIZE = 640  # fallback/default when model input shape is dynamic
 STREAM_TIMEOUT_S = 5.0
-SHOW_PREVIEW = False
+SHOW_PREVIEW = True
 PREVIEW_SCALE = 1.0
-COUNT_LABEL = "Green crabs"
+COUNT_LABEL = "Green Crabs"
 
 
 def resolve_model_path(model_path: str) -> Path:
