@@ -138,26 +138,25 @@ class YoloOnnxDetector:
         self._configure_inference_device()
 
     def _configure_inference_device(self) -> None:
-        if self.device == "cuda":
-            cuda_count = 0
+        if self.device in ("cuda", "cuda_fp16"):
+            target = cv2.dnn.DNN_TARGET_CUDA_FP16 if self.device == "cuda_fp16" else cv2.dnn.DNN_TARGET_CUDA
+            target_name = "CUDA FP16" if self.device == "cuda_fp16" else "CUDA"
+            cuda_count = -1
             try:
                 cuda_count = int(cv2.cuda.getCudaEnabledDeviceCount())
             except Exception:
-                cuda_count = 0
-
-            if cuda_count < 1:
-                print("[worker] CUDA requested, but no CUDA devices detected by OpenCV; using CPU")
-                self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-                return
+                pass
 
             try:
                 self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
-                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
-                print(f"[worker] using CUDA backend/target (detected devices: {cuda_count})")
+                self.net.setPreferableTarget(target)
+                if cuda_count >= 0:
+                    print(f"[worker] using {target_name} backend/target (OpenCV-reported CUDA devices: {cuda_count})")
+                else:
+                    print(f"[worker] using {target_name} backend/target")
                 return
             except cv2.error as exc:
-                print(f"[worker] CUDA backend unavailable in this OpenCV build ({exc}); using CPU")
+                print(f"[worker] unable to enable {target_name} backend ({exc}); using CPU")
                 self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
                 self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
                 return
@@ -418,9 +417,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-size", type=int, default=640, help="Square detector input size")
     parser.add_argument(
         "--device",
-        choices=("cpu", "cuda"),
+        choices=("cpu", "cuda", "cuda_fp16"),
         default="cuda",
-        help="Inference device for OpenCV DNN backend (falls back to CPU if CUDA unavailable)",
+        help="Inference device for OpenCV DNN backend (falls back to CPU if unavailable)",
     )
     parser.add_argument("--stream-timeout", type=float, default=5.0, help="MJPEG socket read timeout (seconds)")
     parser.add_argument("--show-preview", action="store_true", help="Show an annotated OpenCV preview window")
