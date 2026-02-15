@@ -29,7 +29,8 @@ import numpy as np
 
 # Worker configuration
 MJPEG_URL = "http://192.168.42.42:5001/video/Camera%201"
-MODEL_PATH = "/path/to/yolov8n.onnx"
+MODEL_PATH = "crab_detection_v1.onnx"
+MODEL_NUM_CLASSES = 3
 CONF_THRESHOLD = 0.3
 NMS_THRESHOLD = 0.45
 INPUT_SIZE = 640
@@ -158,11 +159,13 @@ class YoloOnnxDetector:
         conf_threshold: float,
         nms_threshold: float,
         input_size: int,
+        num_classes: Optional[int] = None,
     ) -> None:
         self.net = cv2.dnn.readNetFromONNX(model_path)
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size
+        self.num_classes = num_classes
 
     def infer(self, frame_bgr: np.ndarray) -> List[Detection]:
         h, w = frame_bgr.shape[:2]
@@ -177,11 +180,22 @@ class YoloOnnxDetector:
         self.net.setInput(blob)
         pred = self.net.forward()
 
+        if isinstance(pred, (list, tuple)):
+            if not pred:
+                return []
+            if len(pred) > 1:
+                print(f"[detector] model returned {len(pred)} outputs; using the first output tensor")
+            pred = pred[0]
+
         has_objectness: Optional[bool] = None
         non_batch_dims = [int(d) for d in pred.shape if int(d) != 1]
         if len(non_batch_dims) == 2:
             feature_dim = min(non_batch_dims)
-            if feature_dim == 84:  # YOLOv8 style: [cx, cy, w, h, class_scores...]
+            if self.num_classes is not None and feature_dim == self.num_classes + 4:
+                has_objectness = False
+            elif self.num_classes is not None and feature_dim == self.num_classes + 5:
+                has_objectness = True
+            elif feature_dim == 84:  # YOLOv8 style: [cx, cy, w, h, class_scores...]
                 has_objectness = False
             elif feature_dim == 85:  # YOLOv5/7 style: [cx, cy, w, h, obj, class_scores...]
                 has_objectness = True
@@ -315,6 +329,7 @@ def run_worker() -> None:
         conf_threshold=CONF_THRESHOLD,
         nms_threshold=NMS_THRESHOLD,
         input_size=INPUT_SIZE,
+        num_classes=MODEL_NUM_CLASSES,
     )
 
     reader.start()
