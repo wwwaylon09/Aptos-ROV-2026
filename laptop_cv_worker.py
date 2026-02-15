@@ -127,11 +127,43 @@ class YoloOnnxDetector:
         conf_threshold: float,
         nms_threshold: float,
         input_size: int,
+        device: str,
     ) -> None:
         self.net = cv2.dnn.readNetFromONNX(model_path)
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.input_size = input_size
+        self.device = device
+
+        self._configure_inference_device()
+
+    def _configure_inference_device(self) -> None:
+        if self.device in ("cuda", "cuda_fp16"):
+            target = cv2.dnn.DNN_TARGET_CUDA_FP16 if self.device == "cuda_fp16" else cv2.dnn.DNN_TARGET_CUDA
+            target_name = "CUDA FP16" if self.device == "cuda_fp16" else "CUDA"
+            cuda_count = -1
+            try:
+                cuda_count = int(cv2.cuda.getCudaEnabledDeviceCount())
+            except Exception:
+                pass
+
+            try:
+                self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+                self.net.setPreferableTarget(target)
+                if cuda_count >= 0:
+                    print(f"[worker] using {target_name} backend/target (OpenCV-reported CUDA devices: {cuda_count})")
+                else:
+                    print(f"[worker] using {target_name} backend/target")
+                return
+            except cv2.error as exc:
+                print(f"[worker] unable to enable {target_name} backend ({exc}); using CPU")
+                self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                return
+
+        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        print("[worker] using CPU backend/target")
 
     def infer(self, frame_bgr: np.ndarray) -> List[Detection]:
         h, w = frame_bgr.shape[:2]
@@ -277,6 +309,7 @@ def run_worker(args: argparse.Namespace) -> None:
         conf_threshold=args.conf_threshold,
         nms_threshold=args.nms_threshold,
         input_size=args.input_size,
+        device=args.device,
     )
 
     reader.start()
@@ -382,6 +415,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--conf-threshold", type=float, default=0.3, help="Detection confidence threshold")
     parser.add_argument("--nms-threshold", type=float, default=0.45, help="NMS IoU threshold")
     parser.add_argument("--input-size", type=int, default=640, help="Square detector input size")
+    parser.add_argument(
+        "--device",
+        choices=("cpu", "cuda", "cuda_fp16"),
+        default="cuda",
+        help="Inference device for OpenCV DNN backend (falls back to CPU if unavailable)",
+    )
     parser.add_argument("--stream-timeout", type=float, default=5.0, help="MJPEG socket read timeout (seconds)")
     parser.add_argument("--show-preview", action="store_true", help="Show an annotated OpenCV preview window")
     parser.add_argument("--preview-scale", type=float, default=1.0, help="Display scale factor for preview window")
