@@ -40,7 +40,7 @@ MODEL_NUM_CLASSES = 3
 DETECTOR_BACKEND = "auto"  # one of: "auto", "opencv", "onnxruntime"
 CONF_THRESHOLD = 0.3
 NMS_THRESHOLD = 0.45
-INPUT_SIZE = 640
+INPUT_SIZE = 640  # fallback/default when model input shape is dynamic
 STREAM_TIMEOUT_S = 5.0
 SHOW_PREVIEW = False
 PREVIEW_SCALE = 1.0
@@ -183,6 +183,7 @@ class YoloOnnxDetector:
         self.net: Optional[cv2.dnn.Net] = None
         self.ort_session = None
         self.ort_input_name: Optional[str] = None
+        self.ort_input_hw: Tuple[int, int] = (self.input_size, self.input_size)
 
         if self.active_backend == "opencv":
             self.net = cv2.dnn.readNetFromONNX(model_path)
@@ -199,7 +200,17 @@ class YoloOnnxDetector:
             self.model_path,
             providers=["CPUExecutionProvider"],
         )
-        self.ort_input_name = self.ort_session.get_inputs()[0].name
+        ort_input = self.ort_session.get_inputs()[0]
+        self.ort_input_name = ort_input.name
+
+        shape = ort_input.shape
+        if len(shape) >= 4 and isinstance(shape[2], int) and isinstance(shape[3], int):
+            self.ort_input_hw = (int(shape[2]), int(shape[3]))
+            if self.ort_input_hw[0] != self.input_size or self.ort_input_hw[1] != self.input_size:
+                print(
+                    "[detector] overriding input size from model metadata: "
+                    f"{self.input_size} -> {self.ort_input_hw[0]}x{self.ort_input_hw[1]}"
+                )
 
     def _looks_like_opencv_reshape_error(self, exc: Exception) -> bool:
         msg = str(exc).lower()
@@ -255,7 +266,8 @@ class YoloOnnxDetector:
             raise RuntimeError("onnxruntime backend is not initialized")
 
         h, w = frame_bgr.shape[:2]
-        resized = cv2.resize(frame_bgr, (self.input_size, self.input_size), interpolation=cv2.INTER_LINEAR)
+        in_h, in_w = self.ort_input_hw
+        resized = cv2.resize(frame_bgr, (in_w, in_h), interpolation=cv2.INTER_LINEAR)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         blob = np.transpose(rgb, (2, 0, 1)).astype(np.float32) / 255.0
         blob = np.expand_dims(blob, axis=0)
@@ -351,8 +363,13 @@ class YoloOnnxDetector:
             if conf < self.conf_threshold:
                 continue
 
-            scale_x = frame_w / float(self.input_size)
-            scale_y = frame_h / float(self.input_size)
+            if self.active_backend == "onnxruntime":
+                in_h, in_w = self.ort_input_hw
+                scale_x = frame_w / float(in_w)
+                scale_y = frame_h / float(in_h)
+            else:
+                scale_x = frame_w / float(self.input_size)
+                scale_y = frame_h / float(self.input_size)
 
             if coords_are_normalized:
                 candidates = [
