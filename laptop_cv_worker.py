@@ -51,6 +51,25 @@ STREAM_TIMEOUT_S = 5.0
 SHOW_PREVIEW = True
 PREVIEW_SCALE = 1.0
 COUNT_LABEL = "Green Crabs"
+GREEN_CLASS_NAMES = {"green"}
+RED_CLASS_NAMES = {"jonah", "rock"}
+
+
+def detection_color_bgr(class_name: str) -> Tuple[int, int, int]:
+    """Return display color for a detected crab species in BGR format."""
+
+    normalized = class_name.strip().lower()
+    if normalized in GREEN_CLASS_NAMES:
+        return (0, 255, 0)
+    if normalized in RED_CLASS_NAMES:
+        return (0, 0, 255)
+    return (255, 255, 0)
+
+
+def is_green_crab(class_name: str) -> bool:
+    """True when detection represents a green crab species."""
+
+    return class_name.strip().lower() in GREEN_CLASS_NAMES
 
 
 def resolve_model_path(model_path: str) -> Path:
@@ -470,12 +489,13 @@ def run_worker() -> None:
             detections = detector.infer(packet.frame_bgr)
             infer_ms = (time.perf_counter() - infer_t0) * 1000.0
             filtered_detections = [det for det in detections if det.confidence >= CONF_THRESHOLD]
-            count = len(filtered_detections)
+            count = sum(1 for det in filtered_detections if is_green_crab(det.class_name))
 
             frame_vis = packet.frame_bgr.copy()
             for det in filtered_detections:
                 x1, y1, x2, y2 = det.bbox_xyxy
-                cv2.rectangle(frame_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                box_color = detection_color_bgr(det.class_name)
+                cv2.rectangle(frame_vis, (x1, y1), (x2, y2), box_color, 2)
                 label = f"{det.class_name} {det.confidence:.2f}"
                 text_y = y1 - 8 if y1 > 16 else y1 + 18
                 cv2.putText(
@@ -484,7 +504,7 @@ def run_worker() -> None:
                     (x1, text_y),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.5,
-                    (0, 255, 0),
+                    box_color,
                     1,
                     cv2.LINE_AA,
                 )
