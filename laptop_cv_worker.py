@@ -134,6 +134,7 @@ class YoloOnnxDetector:
         self.nms_threshold = nms_threshold
         self.input_size = input_size
         self.device = device
+        self._cuda_failed_runtime = False
 
         self._configure_inference_device()
 
@@ -151,7 +152,7 @@ class YoloOnnxDetector:
                 self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
                 self.net.setPreferableTarget(target)
                 if cuda_count >= 0:
-                    print(f"[worker] using {target_name} backend/target (OpenCV-reported CUDA devices: {cuda_count})")
+                    print(f"[worker] requested {target_name} backend/target (OpenCV-reported CUDA devices: {cuda_count})")
                 else:
                     print(f"[worker] using {target_name} backend/target")
                 return
@@ -176,7 +177,19 @@ class YoloOnnxDetector:
             crop=False,
         )
         self.net.setInput(blob)
-        pred = self.net.forward()
+        try:
+            pred = self.net.forward()
+        except cv2.error as exc:
+            # Some OpenCV builds accept CUDA backend/target calls but fail validation at runtime.
+            if self.device in ("cuda", "cuda_fp16") and not self._cuda_failed_runtime:
+                self._cuda_failed_runtime = True
+                print(f"[worker] CUDA inference failed at runtime ({exc}); falling back to CPU")
+                self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                self.net.setInput(blob)
+                pred = self.net.forward()
+            else:
+                raise
 
         has_objectness: Optional[bool] = None
         non_batch_dims = [int(d) for d in pred.shape if int(d) != 1]
