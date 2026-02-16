@@ -524,11 +524,17 @@ def run_metashape_direct(images_dir: Path, session_dir: Path, cfg: MetashapeConf
         raise
 
     if cfg.build_texture:
-        chunk.buildUV()
+        try:
+            chunk.buildUV(
+                mapping_mode=Metashape.GenericMapping,
+                page_count=cfg.texture_count,
+                texture_size=cfg.texture_size,
+            )
+        except TypeError:
+            chunk.buildUV()
+
         chunk.buildTexture(
             blending_mode=getattr(Metashape, cfg.blending_mode),
-            texture_size=cfg.texture_size,
-            texture_count=cfg.texture_count,
             ghosting_filter=cfg.ghosting_filter,
         )
 
@@ -638,11 +644,17 @@ except RuntimeError as exc:
     raise
 
 if cfg["build_texture"]:
-    chunk.buildUV()
+    try:
+        chunk.buildUV(
+            mapping_mode=Metashape.GenericMapping,
+            page_count=cfg["texture_count"],
+            texture_size=cfg["texture_size"],
+        )
+    except TypeError:
+        chunk.buildUV()
+
     chunk.buildTexture(
         blending_mode=getattr(Metashape, cfg["blending_mode"]),
-        texture_size=cfg["texture_size"],
-        texture_count=cfg["texture_count"],
         ghosting_filter=cfg["ghosting_filter"],
     )
 
