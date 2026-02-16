@@ -508,6 +508,8 @@ def run_metashape_direct(images_dir: Path, session_dir: Path, cfg: MetashapeConf
 
     ensure_sufficient_alignment(chunk, cfg.min_aligned_cameras)
 
+    ensure_sufficient_alignment(chunk, cfg.min_aligned_cameras)
+
     chunk.buildDepthMaps(
         downscale=cfg.depth_downscale,
         filter_mode=getattr(Metashape, cfg.depth_filter_mode),
@@ -626,6 +628,8 @@ if cfg["optimize_cameras"]:
         fit_b1=cfg["camera_fit_b1b2"],
         fit_b2=cfg["camera_fit_b1b2"],
     )
+
+ensure_sufficient_alignment(chunk, cfg["min_aligned_cameras"])
 
 ensure_sufficient_alignment(chunk, cfg["min_aligned_cameras"])
 
@@ -760,6 +764,19 @@ def run_metashape_via_cli(images_dir: Path, session_dir: Path, cfg: MetashapeCon
             log("Metashape offscreen mode failed on Windows; retrying without offscreen.")
             log(" ".join(base_cmd))
             subprocess.run(base_cmd, check=True)
+
+        log("Running Metashape CLI:")
+        log(" ".join(cmd))
+        try:
+            subprocess.run(cmd, check=True)
+        except FileNotFoundError as exc:
+            attempted_text = "\n".join(f"  - {candidate}" for candidate in attempted_executables)
+            raise RuntimeError(
+                "Could not find a runnable Metashape executable.\n"
+                "Set --metashape-executable to your metashape.exe path.\n"
+                "Attempted:\n"
+                f"{attempted_text}"
+            ) from exc
 
 
 
