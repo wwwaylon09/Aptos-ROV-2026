@@ -601,8 +601,40 @@ print(f"Model exported to: {model_path}")
 '''
 
 
+
+
+def resolve_metashape_executable(configured_value: str) -> tuple[str, list[str]]:
+    """Resolve the Metashape executable path and return attempted candidates."""
+    attempted: list[str] = []
+
+    if configured_value:
+        attempted.append(configured_value)
+        found = shutil.which(configured_value)
+        if found:
+            return found, attempted
+
+        configured_path = Path(configured_value).expanduser()
+        if configured_path.exists():
+            return str(configured_path), attempted
+
+    if sys.platform.startswith("win"):
+        windows_candidates = [
+            Path(r"C:/Program Files/Agisoft/Metashape Pro/metashape.exe"),
+            Path(r"C:/Program Files/Agisoft/Metashape Pro/python/metashape.exe"),
+            Path(r"C:/Program Files/Agisoft/Metashape Professional/metashape.exe"),
+            Path(r"C:/Program Files/Agisoft/Metashape Professional/python/metashape.exe"),
+        ]
+        for candidate in windows_candidates:
+            attempted.append(str(candidate))
+            if candidate.exists():
+                return str(candidate), attempted
+
+    # Keep the original string to let subprocess surface platform-specific errors
+    # after we've provided attempted-path diagnostics to the user.
+    return configured_value, attempted
+
 def run_metashape_via_cli(images_dir: Path, session_dir: Path, cfg: MetashapeConfig) -> None:
-    exe = shutil.which(cfg.metashape_executable) or cfg.metashape_executable
+    exe, attempted_executables = resolve_metashape_executable(cfg.metashape_executable)
 
     with tempfile.TemporaryDirectory(prefix="metashape_auto_") as tmp:
         tmpdir = Path(tmp)
@@ -625,7 +657,17 @@ def run_metashape_via_cli(images_dir: Path, session_dir: Path, cfg: MetashapeCon
 
         log("Running Metashape CLI:")
         log(" ".join(cmd))
-        subprocess.run(cmd, check=True)
+        try:
+            subprocess.run(cmd, check=True)
+        except FileNotFoundError as exc:
+            attempted_text = "\n".join(f"  - {candidate}" for candidate in attempted_executables)
+            raise RuntimeError(
+                "Could not find a runnable Metashape executable.\n"
+                "Set --metashape-executable to your metashape.exe path.\n"
+                "Attempted:\n"
+                f"{attempted_text}"
+            ) from exc
+
 
 
 def run_metashape(images_dir: Path, session_dir: Path, cfg: MetashapeConfig) -> None:
