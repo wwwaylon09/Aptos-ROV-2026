@@ -75,6 +75,7 @@ class MetashapeConfig:
     camera_fit_p1p2: bool
     camera_fit_b1b2: bool
     reset_alignment: bool
+    optimize_cameras: bool
     depth_downscale: int
     depth_filter_mode: str
     max_neighbors: int
@@ -174,6 +175,12 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
     parser.add_argument("--camera-fit-p1p2", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--camera-fit-b1b2", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--reset-alignment", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--optimize-cameras",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run Optimize Cameras after alignment (disabled by default).",
+    )
 
     parser.add_argument("--depth-downscale", type=int, default=2)
     parser.add_argument(
@@ -196,7 +203,7 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
     )
     parser.add_argument("--calculate-vertex-colors", action=argparse.BooleanOptionalAction, default=False)
 
-    parser.add_argument("--build-texture", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--build-texture", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--texture-size", type=int, default=4096)
     parser.add_argument("--texture-count", type=int, default=1)
     parser.add_argument(
@@ -257,6 +264,7 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
         camera_fit_p1p2=args.camera_fit_p1p2,
         camera_fit_b1b2=args.camera_fit_b1b2,
         reset_alignment=args.reset_alignment,
+        optimize_cameras=args.optimize_cameras,
         depth_downscale=max(args.depth_downscale, 1),
         depth_filter_mode=args.depth_filter_mode,
         max_neighbors=args.max_neighbors,
@@ -483,19 +491,22 @@ def run_metashape_direct(images_dir: Path, session_dir: Path, cfg: MetashapeConf
         adaptive_fitting=cfg.adaptive_fitting,
     )
 
-    chunk.optimizeCameras(
-        fit_f=cfg.camera_fit_f,
-        fit_cx=cfg.camera_fit_cxcy,
-        fit_cy=cfg.camera_fit_cxcy,
-        fit_k1=cfg.camera_fit_k1k2k3,
-        fit_k2=cfg.camera_fit_k1k2k3,
-        fit_k3=cfg.camera_fit_k1k2k3,
-        fit_k4=cfg.camera_fit_k4,
-        fit_p1=cfg.camera_fit_p1p2,
-        fit_p2=cfg.camera_fit_p1p2,
-        fit_b1=cfg.camera_fit_b1b2,
-        fit_b2=cfg.camera_fit_b1b2,
-    )
+    if cfg.optimize_cameras:
+        chunk.optimizeCameras(
+            fit_f=cfg.camera_fit_f,
+            fit_cx=cfg.camera_fit_cxcy,
+            fit_cy=cfg.camera_fit_cxcy,
+            fit_k1=cfg.camera_fit_k1k2k3,
+            fit_k2=cfg.camera_fit_k1k2k3,
+            fit_k3=cfg.camera_fit_k1k2k3,
+            fit_k4=cfg.camera_fit_k4,
+            fit_p1=cfg.camera_fit_p1p2,
+            fit_p2=cfg.camera_fit_p1p2,
+            fit_b1=cfg.camera_fit_b1b2,
+            fit_b2=cfg.camera_fit_b1b2,
+        )
+
+    ensure_sufficient_alignment(chunk, cfg.min_aligned_cameras)
 
     ensure_sufficient_alignment(chunk, cfg.min_aligned_cameras)
 
@@ -603,19 +614,22 @@ chunk.alignCameras(
     adaptive_fitting=cfg["adaptive_fitting"],
 )
 
-chunk.optimizeCameras(
-    fit_f=cfg["camera_fit_f"],
-    fit_cx=cfg["camera_fit_cxcy"],
-    fit_cy=cfg["camera_fit_cxcy"],
-    fit_k1=cfg["camera_fit_k1k2k3"],
-    fit_k2=cfg["camera_fit_k1k2k3"],
-    fit_k3=cfg["camera_fit_k1k2k3"],
-    fit_k4=cfg["camera_fit_k4"],
-    fit_p1=cfg["camera_fit_p1p2"],
-    fit_p2=cfg["camera_fit_p1p2"],
-    fit_b1=cfg["camera_fit_b1b2"],
-    fit_b2=cfg["camera_fit_b1b2"],
-)
+if cfg["optimize_cameras"]:
+    chunk.optimizeCameras(
+        fit_f=cfg["camera_fit_f"],
+        fit_cx=cfg["camera_fit_cxcy"],
+        fit_cy=cfg["camera_fit_cxcy"],
+        fit_k1=cfg["camera_fit_k1k2k3"],
+        fit_k2=cfg["camera_fit_k1k2k3"],
+        fit_k3=cfg["camera_fit_k1k2k3"],
+        fit_k4=cfg["camera_fit_k4"],
+        fit_p1=cfg["camera_fit_p1p2"],
+        fit_p2=cfg["camera_fit_p1p2"],
+        fit_b1=cfg["camera_fit_b1b2"],
+        fit_b2=cfg["camera_fit_b1b2"],
+    )
+
+ensure_sufficient_alignment(chunk, cfg["min_aligned_cameras"])
 
 ensure_sufficient_alignment(chunk, cfg["min_aligned_cameras"])
 
