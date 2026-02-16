@@ -139,13 +139,19 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
     )
 
     # Metashape controls
+    default_headless = not sys.platform.startswith("win")
     parser.add_argument("--run-metashape", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--metashape-executable",
         default="metashape",
         help="Path to Metashape executable used for -r script mode when Python API is unavailable.",
     )
-    parser.add_argument("--metashape-headless", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--metashape-headless",
+        action=argparse.BooleanOptionalAction,
+        default=default_headless,
+        help="Use headless/offscreen Metashape mode (off by default on Windows).",
+    )
     parser.add_argument("--project-filename", default="project.psx")
     parser.add_argument("--model-filename", default="model.obj")
     parser.add_argument("--model-format", choices=["obj", "ply", "stl", "fbx", "glb"], default="obj")
@@ -649,11 +655,31 @@ def run_metashape_via_cli(images_dir: Path, session_dir: Path, cfg: MetashapeCon
         }
         config_path.write_text(json.dumps(config_payload, indent=2), encoding="utf-8")
 
-        cmd = [exe]
-        if cfg.metashape_headless:
-            cmd.append("-platform")
-            cmd.append("offscreen")
-        cmd.extend(["-r", str(script_path), str(config_path)])
+        base_cmd = [exe, "-r", str(script_path), str(config_path)]
+        cmd = [exe, "-platform", "offscreen", "-r", str(script_path), str(config_path)] if cfg.metashape_headless else base_cmd
+
+        log("Running Metashape CLI:")
+        log(" ".join(cmd))
+        try:
+            subprocess.run(cmd, check=True)
+        except FileNotFoundError as exc:
+            attempted_text = "\n".join(f"  - {candidate}" for candidate in attempted_executables)
+            raise RuntimeError(
+                "Could not find a runnable Metashape executable.\n"
+                "Set --metashape-executable to your metashape.exe path.\n"
+                "Attempted:\n"
+                f"{attempted_text}"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            should_retry_without_offscreen = (
+                cfg.metashape_headless and sys.platform.startswith("win") and exc.returncode != 0
+            )
+            if not should_retry_without_offscreen:
+                raise
+
+            log("Metashape offscreen mode failed on Windows; retrying without offscreen.")
+            log(" ".join(base_cmd))
+            subprocess.run(base_cmd, check=True)
 
         log("Running Metashape CLI:")
         log(" ".join(cmd))
