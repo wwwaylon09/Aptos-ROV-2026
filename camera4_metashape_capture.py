@@ -88,6 +88,7 @@ class MetashapeConfig:
     blending_mode: str
     ghosting_filter: bool
     export_crs: str
+    min_aligned_cameras: int
 
 
 def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
@@ -206,6 +207,12 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
     parser.add_argument("--ghosting-filter", action=argparse.BooleanOptionalAction, default=True)
 
     parser.add_argument("--export-crs", default="")
+    parser.add_argument(
+        "--min-aligned-cameras",
+        type=int,
+        default=4,
+        help="Fail early if fewer than this many cameras align before depth/model build.",
+    )
 
     args = parser.parse_args()
 
@@ -263,6 +270,7 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
         blending_mode=args.blending_mode,
         ghosting_filter=args.ghosting_filter,
         export_crs=args.export_crs,
+        min_aligned_cameras=max(args.min_aligned_cameras, 1),
     )
 
     if capture_cfg.image_format == "png" and metashape_cfg.image_glob == "*.jpg":
@@ -435,6 +443,19 @@ def capture_on_command(capture_cfg: CaptureConfig) -> tuple[Path, Path, int]:
             cv2.destroyAllWindows()
 
 
+def count_aligned_cameras(chunk) -> int:
+    return sum(1 for cam in chunk.cameras if cam.transform is not None)
+
+
+def ensure_sufficient_alignment(chunk, minimum: int) -> None:
+    aligned = count_aligned_cameras(chunk)
+    if aligned < minimum:
+        raise RuntimeError(
+            f"Only {aligned} cameras aligned. Need at least {minimum} aligned cameras for reliable depth/map model build. "
+            "Capture more frames with stronger overlap and motion parallax, then retry."
+        )
+
+
 def run_metashape_direct(images_dir: Path, session_dir: Path, cfg: MetashapeConfig) -> None:
     import Metashape  # type: ignore
 
@@ -476,18 +497,31 @@ def run_metashape_direct(images_dir: Path, session_dir: Path, cfg: MetashapeConf
         fit_b2=cfg.camera_fit_b1b2,
     )
 
+    ensure_sufficient_alignment(chunk, cfg.min_aligned_cameras)
+
     chunk.buildDepthMaps(
         downscale=cfg.depth_downscale,
         filter_mode=getattr(Metashape, cfg.depth_filter_mode),
         max_neighbors=cfg.max_neighbors,
         reuse_depth=cfg.reuse_depth,
     )
-    chunk.buildModel(
-        source_data=Metashape.DepthMapsData,
-        face_count=getattr(Metashape, cfg.face_count),
-        interpolation=getattr(Metashape, cfg.interpolation),
-        vertex_colors=cfg.calculate_vertex_colors,
-    )
+    try:
+        chunk.buildModel(
+            source_data=Metashape.DepthMapsData,
+            face_count=getattr(Metashape, cfg.face_count),
+            interpolation=getattr(Metashape, cfg.interpolation),
+            vertex_colors=cfg.calculate_vertex_colors,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        if "No cameras with depth maps in working volume" in message:
+            aligned = count_aligned_cameras(chunk)
+            raise RuntimeError(
+                f"Metashape could not build depth-map model because no usable depth maps were generated. "
+                f"Aligned cameras: {aligned}. Try collecting 50-100 images with stronger overlap/parallax "
+                "and avoid near-stationary frames."
+            ) from exc
+        raise
 
     if cfg.build_texture:
         chunk.buildUV()
@@ -533,6 +567,17 @@ doc = Metashape.Document()
 doc.save(str(project_path))
 chunk = doc.addChunk()
 
+def count_aligned_cameras(chunk):
+    return sum(1 for cam in chunk.cameras if cam.transform is not None)
+
+def ensure_sufficient_alignment(chunk, minimum):
+    aligned = count_aligned_cameras(chunk)
+    if aligned < minimum:
+        raise RuntimeError(
+            f"Only {aligned} cameras aligned. Need at least {minimum} aligned cameras for reliable depth/map model build. "
+            "Capture more frames with stronger overlap and motion parallax, then retry."
+        )
+
 image_paths = sorted(str(p) for p in images_dir.glob(cfg["image_glob"]))
 if not image_paths:
     raise RuntimeError(f"No images matched {cfg['image_glob']} in {images_dir}")
@@ -566,18 +611,31 @@ chunk.optimizeCameras(
     fit_b2=cfg["camera_fit_b1b2"],
 )
 
+ensure_sufficient_alignment(chunk, cfg["min_aligned_cameras"])
+
 chunk.buildDepthMaps(
     downscale=cfg["depth_downscale"],
     filter_mode=getattr(Metashape, cfg["depth_filter_mode"]),
     max_neighbors=cfg["max_neighbors"],
     reuse_depth=cfg["reuse_depth"],
 )
-chunk.buildModel(
-    source_data=Metashape.DepthMapsData,
-    face_count=getattr(Metashape, cfg["face_count"]),
-    interpolation=getattr(Metashape, cfg["interpolation"]),
-    vertex_colors=cfg["calculate_vertex_colors"],
-)
+try:
+    chunk.buildModel(
+        source_data=Metashape.DepthMapsData,
+        face_count=getattr(Metashape, cfg["face_count"]),
+        interpolation=getattr(Metashape, cfg["interpolation"]),
+        vertex_colors=cfg["calculate_vertex_colors"],
+    )
+except RuntimeError as exc:
+    message = str(exc)
+    if "No cameras with depth maps in working volume" in message:
+        aligned = count_aligned_cameras(chunk)
+        raise RuntimeError(
+            f"Metashape could not build depth-map model because no usable depth maps were generated. "
+            f"Aligned cameras: {aligned}. Try collecting 50-100 images with stronger overlap/parallax "
+            "and avoid near-stationary frames."
+        ) from exc
+    raise
 
 if cfg["build_texture"]:
     chunk.buildUV()
