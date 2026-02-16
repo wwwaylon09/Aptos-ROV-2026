@@ -810,6 +810,19 @@ def run_metashape_via_cli(images_dir: Path, session_dir: Path, cfg: MetashapeCon
             log(" ".join(base_cmd))
             subprocess.run(base_cmd, check=True)
 
+        log("Running Metashape CLI:")
+        log(" ".join(cmd))
+        try:
+            subprocess.run(cmd, check=True)
+        except FileNotFoundError as exc:
+            attempted_text = "\n".join(f"  - {candidate}" for candidate in attempted_executables)
+            raise RuntimeError(
+                "Could not find a runnable Metashape executable.\n"
+                "Set --metashape-executable to your metashape.exe path.\n"
+                "Attempted:\n"
+                f"{attempted_text}"
+            ) from exc
+
 
 
 def run_metashape(images_dir: Path, session_dir: Path, cfg: MetashapeConfig) -> None:
