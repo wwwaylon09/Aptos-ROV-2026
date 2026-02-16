@@ -49,6 +49,7 @@ class CaptureConfig:
     max_frames: int
     min_laplacian_variance: float
     dedupe_mean_absdiff_threshold: float
+    min_frames_for_model: int
 
 
 @dataclass
@@ -67,6 +68,7 @@ class MetashapeConfig:
     reference_preselection: bool
     filter_stationary_points: bool
     guided_matching: bool
+    sequential_preselection: bool
     adaptive_fitting: bool
     camera_fit_f: bool
     camera_fit_cxcy: bool
@@ -139,6 +141,12 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
         default=0.0,
         help="Reject near-duplicate frames under this mean absolute pixel difference (0 disables).",
     )
+    parser.add_argument(
+        "--min-frames-for-model",
+        type=int,
+        default=40,
+        help="Require at least this many captured frames before launching Metashape.",
+    )
 
     # Metashape controls
     default_headless = not sys.platform.startswith("win")
@@ -166,6 +174,12 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
     parser.add_argument("--reference-preselection", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--filter-stationary-points", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--guided-matching", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--sequential-preselection",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use sequential pair preselection when available in Metashape API.",
+    )
 
     parser.add_argument("--adaptive-fitting", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--camera-fit-f", action=argparse.BooleanOptionalAction, default=True)
@@ -239,6 +253,7 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
         max_frames=max(args.max_frames, 0),
         min_laplacian_variance=max(args.min_laplacian_variance, 0.0),
         dedupe_mean_absdiff_threshold=max(args.dedupe_mean_absdiff_threshold, 0.0),
+        min_frames_for_model=max(args.min_frames_for_model, 3),
     )
 
     metashape_cfg = MetashapeConfig(
@@ -256,6 +271,7 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
         reference_preselection=args.reference_preselection,
         filter_stationary_points=args.filter_stationary_points,
         guided_matching=args.guided_matching,
+        sequential_preselection=args.sequential_preselection,
         adaptive_fitting=args.adaptive_fitting,
         camera_fit_f=args.camera_fit_f,
         camera_fit_cxcy=args.camera_fit_cxcy,
@@ -464,6 +480,32 @@ def ensure_sufficient_alignment(chunk, minimum: int) -> None:
         )
 
 
+def match_photos_with_optional_sequential(chunk, cfg):
+    import Metashape  # type: ignore
+
+    match_kwargs = dict(
+        downscale=cfg.match_downscale,
+        generic_preselection=cfg.generic_preselection,
+        reference_preselection=cfg.reference_preselection,
+        filter_stationary_points=cfg.filter_stationary_points,
+        guided_matching=cfg.guided_matching,
+        keypoint_limit=cfg.keypoint_limit,
+        tiepoint_limit=cfg.tiepoint_limit,
+    )
+
+    if cfg.sequential_preselection and hasattr(Metashape, "SequentialPreselection"):
+        try:
+            chunk.matchPhotos(
+                reference_preselection_mode=Metashape.SequentialPreselection,
+                **match_kwargs,
+            )
+            return
+        except TypeError:
+            pass
+
+    chunk.matchPhotos(**match_kwargs)
+
+
 def run_metashape_direct(images_dir: Path, session_dir: Path, cfg: MetashapeConfig) -> None:
     import Metashape  # type: ignore
 
@@ -477,15 +519,7 @@ def run_metashape_direct(images_dir: Path, session_dir: Path, cfg: MetashapeConf
         raise RuntimeError(f"No images matched {cfg.image_glob} in {images_dir}")
 
     chunk.addPhotos(image_paths)
-    chunk.matchPhotos(
-        downscale=cfg.match_downscale,
-        generic_preselection=cfg.generic_preselection,
-        reference_preselection=cfg.reference_preselection,
-        filter_stationary_points=cfg.filter_stationary_points,
-        guided_matching=cfg.guided_matching,
-        keypoint_limit=cfg.keypoint_limit,
-        tiepoint_limit=cfg.tiepoint_limit,
-    )
+    match_photos_with_optional_sequential(chunk, cfg)
     chunk.alignCameras(
         reset_alignment=cfg.reset_alignment,
         adaptive_fitting=cfg.adaptive_fitting,
@@ -505,8 +539,6 @@ def run_metashape_direct(images_dir: Path, session_dir: Path, cfg: MetashapeConf
             fit_b1=cfg.camera_fit_b1b2,
             fit_b2=cfg.camera_fit_b1b2,
         )
-
-    ensure_sufficient_alignment(chunk, cfg.min_aligned_cameras)
 
     ensure_sufficient_alignment(chunk, cfg.min_aligned_cameras)
 
@@ -599,16 +631,31 @@ image_paths = sorted(str(p) for p in images_dir.glob(cfg["image_glob"]))
 if not image_paths:
     raise RuntimeError(f"No images matched {cfg['image_glob']} in {images_dir}")
 
+def match_photos_with_optional_sequential(chunk, cfg):
+    match_kwargs = dict(
+        downscale=cfg["match_downscale"],
+        generic_preselection=cfg["generic_preselection"],
+        reference_preselection=cfg["reference_preselection"],
+        filter_stationary_points=cfg["filter_stationary_points"],
+        guided_matching=cfg["guided_matching"],
+        keypoint_limit=cfg["keypoint_limit"],
+        tiepoint_limit=cfg["tiepoint_limit"],
+    )
+
+    if cfg["sequential_preselection"] and hasattr(Metashape, "SequentialPreselection"):
+        try:
+            chunk.matchPhotos(
+                reference_preselection_mode=Metashape.SequentialPreselection,
+                **match_kwargs,
+            )
+            return
+        except TypeError:
+            pass
+
+    chunk.matchPhotos(**match_kwargs)
+
 chunk.addPhotos(image_paths)
-chunk.matchPhotos(
-    downscale=cfg["match_downscale"],
-    generic_preselection=cfg["generic_preselection"],
-    reference_preselection=cfg["reference_preselection"],
-    filter_stationary_points=cfg["filter_stationary_points"],
-    guided_matching=cfg["guided_matching"],
-    keypoint_limit=cfg["keypoint_limit"],
-    tiepoint_limit=cfg["tiepoint_limit"],
-)
+match_photos_with_optional_sequential(chunk, cfg)
 chunk.alignCameras(
     reset_alignment=cfg["reset_alignment"],
     adaptive_fitting=cfg["adaptive_fitting"],
@@ -628,8 +675,6 @@ if cfg["optimize_cameras"]:
         fit_b1=cfg["camera_fit_b1b2"],
         fit_b2=cfg["camera_fit_b1b2"],
     )
-
-ensure_sufficient_alignment(chunk, cfg["min_aligned_cameras"])
 
 ensure_sufficient_alignment(chunk, cfg["min_aligned_cameras"])
 
@@ -807,8 +852,11 @@ def main() -> int:
     log(f"Capture stopped. Saved frames: {saved_frames}")
     log(f"Session directory: {session_dir}")
 
-    if saved_frames < 3:
-        log("Not enough frames for photogrammetry. Need at least 3.")
+    if saved_frames < capture_cfg.min_frames_for_model:
+        log(
+            f"Not enough frames for photogrammetry. Need at least {capture_cfg.min_frames_for_model} "
+            f"(captured {saved_frames})."
+        )
         return 1
 
     run_metashape(images_dir, session_dir, metashape_cfg)
