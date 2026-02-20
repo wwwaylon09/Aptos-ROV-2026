@@ -22,6 +22,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import cv2
@@ -48,6 +50,7 @@ CONF_THRESHOLD = 0.75
 NMS_THRESHOLD = 0.45
 INPUT_SIZE = 640  # fallback/default when model input shape is dynamic
 STREAM_TIMEOUT_S = 5.0
+DETECTION_POST_URL = "http://192.168.42.42:5001/detections"
 SHOW_PREVIEW = True
 PREVIEW_SCALE = 1.0
 COUNT_LABEL = "Green Crabs"
@@ -90,6 +93,32 @@ def resolve_model_path(model_path: str) -> Path:
             return wsl_path
 
     return path
+
+
+def infer_camera_id_from_stream_url(mjpeg_url: str) -> str:
+    parsed = urlparse(mjpeg_url)
+    path = parsed.path.strip("/")
+    if path.startswith("cv/") and path.endswith(".mjpg"):
+        return path.split("/", 1)[1][:-5]
+    return "camera"
+
+
+def post_detections(endpoint_url: str, detection_objects: List[dict]) -> None:
+    if not endpoint_url:
+        return
+
+    body = json.dumps({"detections": detection_objects}, separators=(",", ":")).encode("utf-8")
+    req = Request(
+        endpoint_url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": "rov-cv-worker/1.0"},
+    )
+    try:
+        with urlopen(req, timeout=1.5):
+            return
+    except URLError as exc:
+        print(f"[worker] detection POST failed: {exc}")
 
 
 @dataclass
@@ -474,6 +503,7 @@ def run_worker() -> None:
     last_processed_id = 0
     frame_count = 0
     fps_window_start = time.monotonic()
+    camera_id = infer_camera_id_from_stream_url(MJPEG_URL)
 
     try:
         while True:
@@ -557,6 +587,17 @@ def run_worker() -> None:
                 ],
                 "count": count,
             }
+            detection_packet = [
+                {
+                    "camera_id": camera_id,
+                    "timestamp": time.time(),
+                    "label": det.class_name,
+                    "confidence": round(det.confidence, 4),
+                    "bbox": list(det.bbox_xyxy),
+                }
+                for det in filtered_detections
+            ]
+            post_detections(DETECTION_POST_URL, detection_packet)
             print(json.dumps(result, separators=(",", ":")))
     except KeyboardInterrupt:
         print("\n[worker] interrupted, stopping...")
