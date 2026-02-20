@@ -26,9 +26,17 @@ def camera_dom_id(name: str) -> str:
     return "cam-" + "".join(ch.lower() if ch.isalnum() else "-" for ch in name)
 
 
+def camera_url_id(name: str, config: dict) -> str:
+    configured = str(config.get("id", "")).strip().lower()
+    base = configured or "".join(ch.lower() if ch.isalnum() else "-" for ch in name)
+    safe = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in base).strip("-")
+    return safe or "camera"
+
+
 class Camera:
     def __init__(self, name, config):
         self.name = name
+        self.camera_id = camera_url_id(name, config)
         self.device_path = config["device_path"]
         self.width = int(config.get("width", 640))
         self.height = int(config.get("height", 480))
@@ -125,9 +133,11 @@ class Camera:
         now = time.monotonic()
         age = None if self.last_frame_monotonic is None else round(now - self.last_frame_monotonic, 2)
         return {
+            "camera_id": self.camera_id,
+            "name": self.name,
             "online": self.online,
             "resolution": f"{self.width}x{self.height}",
-            "fps": self.fps,
+            "target_fps": self.fps,
             "last_frame_age_seconds": age,
             "capture_failures": self.failures,
         }
@@ -138,6 +148,9 @@ class Camera:
 
 
 cameras = {name: Camera(name, config) for name, config in CAMERA_CONFIG.items()}
+camera_ids = {cam.camera_id: cam for cam in cameras.values()}
+if len(camera_ids) != len(cameras):
+    raise ValueError("Camera IDs must be unique and URL-safe")
 START_TIME = time.time()
 
 
@@ -164,6 +177,29 @@ def status():
     return {
         "service": _service_status(),
         "cameras": {name: cam.get_status() for name, cam in cameras.items()},
+    }
+
+
+@app.route("/cv/status")
+def cv_status():
+    """CV API status endpoint.
+
+    URL format: /cv/status
+    Response content type: application/json
+    """
+
+    return {
+        "service": _service_status(),
+        "cameras": {
+            cam_id: {
+                "camera_id": cam.camera_id,
+                "name": cam.name,
+                "resolution": f"{cam.width}x{cam.height}",
+                "target_fps": cam.fps,
+                "online": cam.get_status()["online"],
+            }
+            for cam_id, cam in camera_ids.items()
+        },
     }
 
 
@@ -243,6 +279,21 @@ def index():
 @app.route("/video/<camera>")
 def video_feed(camera):
     cam = cameras.get(camera)
+    if not cam:
+        return "Camera not found", 404
+
+    return Response(generate_frames(cam), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.route("/cv/<camera_id>.mjpg")
+def cv_feed(camera_id):
+    """CV API MJPEG stream endpoint.
+
+    URL format: /cv/<camera_id>.mjpg
+    Response content type: multipart/x-mixed-replace; boundary=frame
+    """
+
+    cam = camera_ids.get(camera_id)
     if not cam:
         return "Camera not found", 404
 
