@@ -34,7 +34,7 @@ except ImportError:
 
 
 # Worker configuration
-MJPEG_URL = "http://192.168.42.42:5001/video/Camera%204"
+MJPEG_URL = "http://192.168.42.42:5001/cv/camera-4.mjpg"
 MODEL_PATH = "crab_detection.onnx"
 MODEL_NUM_CLASSES = 3
 CLASS_NAMES: Sequence[str] = (

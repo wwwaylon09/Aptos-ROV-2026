@@ -16,6 +16,7 @@ VIDEO_HEALTH_LOG_INTERVAL_SECONDS = float(os.getenv("ROV_VIDEO_HEALTH_LOG_INTERV
 
 CAMERA_CONFIG = {
     "Camera 1": {
+        "id": "camera-1",
         "device_path": "/dev/v4l/by-path/platform-xhci-hcd.1-usb-0:1:1.0-video-index0",
         "width": 640,
         "height": 480,
@@ -23,6 +24,7 @@ CAMERA_CONFIG = {
         "jpeg_quality": 55,
     },
     "Camera 2": {
+        "id": "camera-2",
         "device_path": "/dev/v4l/by-path/platform-xhci-hcd.0-usb-0:1:1.0-video-index0",
         "width": 640,
         "height": 480,
@@ -30,6 +32,7 @@ CAMERA_CONFIG = {
         "jpeg_quality": 55,
     },
     "Camera 3": {
+        "id": "camera-3",
         "device_path": "/dev/v4l/by-path/platform-xhci-hcd.0-usb-0:2:1.0-video-index0",
         "width": 640,
         "height": 480,
@@ -37,6 +40,7 @@ CAMERA_CONFIG = {
         "jpeg_quality": 55,
     },
     "Camera 4": {
+        "id": "camera-4",
         "device_path": "/dev/v4l/by-path/platform-xhci-hcd.1-usb-0:2:1.0-video-index0",
         "width": 1920,
         "height": 1080,
