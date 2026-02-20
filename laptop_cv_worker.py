@@ -34,8 +34,8 @@ except ImportError:
 
 
 # Worker configuration
-MJPEG_URL = "http://192.168.42.42:5001/video/Camera%201"
-MODEL_PATH = "crab_detection_v2.onnx"
+MJPEG_URL = "http://192.168.42.42:5001/video/Camera%204"
+MODEL_PATH = "crab_detection.onnx"
 MODEL_NUM_CLASSES = 3
 CLASS_NAMES: Sequence[str] = (
     # Update with your model's species labels in class-index order.
@@ -44,7 +44,7 @@ CLASS_NAMES: Sequence[str] = (
     "Rock",
 )
 DETECTOR_BACKEND = "auto"  # one of: "auto", "opencv", "onnxruntime"
-CONF_THRESHOLD = 0.5
+CONF_THRESHOLD = 0.75
 NMS_THRESHOLD = 0.45
 INPUT_SIZE = 640  # fallback/default when model input shape is dynamic
 STREAM_TIMEOUT_S = 5.0
