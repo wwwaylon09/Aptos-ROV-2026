@@ -6,7 +6,7 @@ import threading
 import time
 
 import cv2
-from flask import Flask, Response, render_template_string
+from flask import Flask, Response, jsonify, render_template_string, request
 
 from rov.shared_config import (
     CAMERA_CONFIG,
@@ -20,6 +20,28 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [video] %(levelname)
 LOGGER = logging.getLogger("rov.video")
 
 app = Flask(__name__)
+
+# Detection JSON schema used by POST /detections.
+DETECTION_JSON_SCHEMA = {
+    "type": "object",
+    "required": ["camera_id", "timestamp", "label", "confidence", "bbox"],
+    "properties": {
+        "camera_id": {"type": "string", "minLength": 1},
+        "timestamp": {"type": "number", "description": "Unix epoch seconds"},
+        "label": {"type": "string", "minLength": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "bbox": {
+            "type": "array",
+            "items": {"type": "number"},
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "[x1, y1, x2, y2] pixel coordinates",
+        },
+    },
+}
+DETECTION_TTL_SECONDS = 4.0
+DETECTION_LOCK = threading.Lock()
+LATEST_DETECTIONS = {}
 
 
 def camera_dom_id(name: str) -> str:
@@ -172,11 +194,118 @@ def _service_status():
     }
 
 
+def _normalize_detection(detection):
+    if not isinstance(detection, dict):
+        raise ValueError("Each detection must be an object")
+
+    camera_id = str(detection.get("camera_id", "")).strip()
+    label = str(detection.get("label", "")).strip()
+
+    if not camera_id:
+        raise ValueError("camera_id is required")
+    if not label:
+        raise ValueError("label is required")
+
+    try:
+        timestamp = float(detection["timestamp"])
+        confidence = float(detection["confidence"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("timestamp and confidence must be numbers") from exc
+
+    if not 0.0 <= confidence <= 1.0:
+        raise ValueError("confidence must be between 0 and 1")
+
+    bbox = detection.get("bbox")
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        raise ValueError("bbox must be [x1, y1, x2, y2]")
+
+    try:
+        normalized_bbox = [int(round(float(value))) for value in bbox]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("bbox values must be numbers") from exc
+
+    return {
+        "camera_id": camera_id,
+        "timestamp": timestamp,
+        "label": label,
+        "confidence": round(confidence, 4),
+        "bbox": normalized_bbox,
+    }
+
+
+def _extract_detections(payload):
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be an object or array")
+    if isinstance(payload.get("detections"), list):
+        return payload["detections"]
+    return [payload]
+
+
+def _latest_detections_snapshot(include_stale=False):
+    now_monotonic = time.monotonic()
+    snapshot = {}
+    with DETECTION_LOCK:
+        for camera_id, entry in LATEST_DETECTIONS.items():
+            age_seconds = now_monotonic - entry["received_monotonic"]
+            if not include_stale and age_seconds > DETECTION_TTL_SECONDS:
+                continue
+            snapshot[camera_id] = {
+                "updated_at": entry["updated_at"],
+                "age_seconds": round(age_seconds, 2),
+                "detections": entry["detections"],
+            }
+    return snapshot
+
+
 @app.route("/status")
 def status():
     return {
         "service": _service_status(),
         "cameras": {name: cam.get_status() for name, cam in cameras.items()},
+        "detections": _latest_detections_snapshot(),
+    }
+
+
+@app.route("/detections", methods=["GET", "POST"])
+def detections():
+    if request.method == "GET":
+        return {
+            "schema": DETECTION_JSON_SCHEMA,
+            "ttl_seconds": DETECTION_TTL_SECONDS,
+            "latest": _latest_detections_snapshot(),
+        }
+
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({"error": "Expected JSON payload"}), 400
+
+    try:
+        normalized_detections = [_normalize_detection(item) for item in _extract_detections(payload)]
+    except ValueError as exc:
+        return jsonify({"error": str(exc), "schema": DETECTION_JSON_SCHEMA}), 400
+
+    now_monotonic = time.monotonic()
+    now_unix = time.time()
+
+    grouped = {}
+    for detection in normalized_detections:
+        grouped.setdefault(detection["camera_id"], []).append(detection)
+
+    with DETECTION_LOCK:
+        for camera_id, camera_detections in grouped.items():
+            LATEST_DETECTIONS[camera_id] = {
+                "updated_at": now_unix,
+                "received_monotonic": now_monotonic,
+                "detections": camera_detections,
+            }
+
+    return {
+        "ok": True,
+        "received": len(normalized_detections),
+        "cameras": sorted(grouped.keys()),
+        "ttl_seconds": DETECTION_TTL_SECONDS,
     }
 
 
@@ -213,6 +342,7 @@ def index():
         <article class="camera-tile" id="{dom_id}" data-camera-name="{name}" style="--tile-ratio: {cam.aspect_ratio};">
             <img src="/video/{name}" class="camera-img" alt="{name} feed" loading="lazy">
             <div class="no-signal-label">NO SIGNAL</div>
+            <div class="detections-panel" aria-live="polite">No recent detections</div>
             <div class="camera-label">{name}</div>
             <div class="camera-meta">{cam.width}x{cam.height} @ {cam.fps} FPS</div>
         </article>
@@ -235,6 +365,9 @@ def index():
             .camera-label, .camera-meta {{ position: absolute; left: 8px; font-size: 13px; background: var(--label-bg); color: #f0f0f0; padding: 2px 7px; border-radius: 4px; }}
             .camera-label {{ bottom: 34px; font-weight: 600; }}
             .camera-meta {{ bottom: 8px; color: #b8b8ba; }}
+            .detections-panel {{ position: absolute; top: 8px; right: 8px; min-width: 170px; max-width: calc(100% - 16px); max-height: 46%; overflow: auto; font-size: 12px; line-height: 1.35; padding: 6px 8px; border-radius: 6px; background: rgba(0,0,0,0.65); color: #e8f0e8; border: 1px solid rgba(160,160,160,0.3); }}
+            .detections-panel ul {{ margin: 0; padding-left: 16px; }}
+            .detections-panel.empty {{ color: #9f9fa6; }}
             .no-signal-label {{ position: absolute; inset: 0; display: none; align-items: center; justify-content: center; font-size: clamp(18px, 2.8vw, 30px); font-weight: bold; color: #ff4141; background: rgba(0,0,0,0.76); }}
             .camera-tile.no-signal img {{ display: none; }}
             .camera-tile.no-signal .no-signal-label {{ display: flex; }}
@@ -243,22 +376,65 @@ def index():
 
         <script>
         const previousState = new Map();
+        const latestDetectionByCamera = new Map();
+        const DETECTION_UI_TTL_MS = {int(DETECTION_TTL_SECONDS * 1000)};
+
+        function normalizeDetectionTimestampMs(detectionBlock) {{
+            if (!detectionBlock || !Array.isArray(detectionBlock.detections) || detectionBlock.detections.length === 0) return null;
+            const latest = Math.max(...detectionBlock.detections.map((item) => Number(item.timestamp || 0)));
+            if (!Number.isFinite(latest) || latest <= 0) return null;
+            return latest * 1000;
+        }}
+
+        function renderDetections(tile, detections) {{
+            const panel = tile.querySelector(".detections-panel");
+            if (!panel) return;
+            if (!detections || detections.length === 0) {{
+                panel.classList.add("empty");
+                panel.textContent = "No recent detections";
+                return;
+            }}
+
+            panel.classList.remove("empty");
+            const entries = detections
+                .map((item) => `\n<li>${{item.label}} (${{(Number(item.confidence) * 100).toFixed(0)}}%) [${{item.bbox.join(",")}}]</li>`)
+                .join("");
+            panel.innerHTML = `<ul>${{entries}}\n</ul>`;
+        }}
 
         async function updateStatus() {{
             const res = await fetch("/status");
             const data = await res.json();
             const cameraData = data.cameras || {{}};
+            const detectionsByCamera = data.detections || {{}};
             for (const [name, details] of Object.entries(cameraData)) {{
                 const tile = document.querySelector(`[data-camera-name="${{name}}"]`);
                 if (!tile) continue;
                 const online = Boolean(details.online);
                 const wasOnline = previousState.get(name);
+                const cameraId = details.camera_id;
                 tile.classList.toggle("no-signal", !online);
                 if (online && wasOnline === false) {{
                     const img = tile.querySelector("img");
                     const base = img.src.split("?")[0];
                     img.src = base + "?t=" + Date.now();
                 }}
+
+                const incoming = detectionsByCamera[cameraId];
+                if (incoming) {{
+                    latestDetectionByCamera.set(cameraId, incoming);
+                }}
+
+                const tracked = latestDetectionByCamera.get(cameraId);
+                const detectionTimestampMs = normalizeDetectionTimestampMs(tracked);
+                const isFresh = detectionTimestampMs !== null && (Date.now() - detectionTimestampMs) <= DETECTION_UI_TTL_MS;
+                if (!isFresh) {{
+                    latestDetectionByCamera.delete(cameraId);
+                    renderDetections(tile, []);
+                }} else {{
+                    renderDetections(tile, tracked.detections || []);
+                }}
+
                 previousState.set(name, online);
             }}
         }}
