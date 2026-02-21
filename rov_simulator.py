@@ -235,16 +235,22 @@ class InputModel:
 
 class ROVSimulator:
     def __init__(self):
+        self.linear_drag = 3.8
+        self.angular_drag = 6.5
+        self.linear_quad_drag = 1.1
+        self.angular_quad_drag = 2.4
+        self.force_gain = 4.8
+        self.torque_gain = 2.6
+
+        self.net_body_force = [0.0, 0.0, 0.0]
+        self.net_body_torque = [0.0, 0.0, 0.0]
+        self.reset()
+
+    def reset(self):
         self.pos = [0.0, 0.0, 0.0]
         self.vel = [0.0, 0.0, 0.0]
         self.rot = [0.0, 0.0, 0.0]  # pitch, yaw, roll
         self.rot_vel = [0.0, 0.0, 0.0]
-
-        self.linear_drag = 1.8
-        self.angular_drag = 2.3
-        self.force_gain = 4.8
-        self.torque_gain = 2.6
-
         self.net_body_force = [0.0, 0.0, 0.0]
         self.net_body_torque = [0.0, 0.0, 0.0]
 
@@ -267,17 +273,24 @@ class ROVSimulator:
         world_force = rotate_point(tuple(body_force), tuple(self.rot))
         for axis in range(3):
             self.vel[axis] += world_force[axis] * dt
-            self.vel[axis] *= max(0.0, 1.0 - self.linear_drag * dt)
+            speed = abs(self.vel[axis])
+            total_linear_drag = self.linear_drag + self.linear_quad_drag * speed
+            self.vel[axis] *= max(0.0, 1.0 - total_linear_drag * dt)
             self.pos[axis] += self.vel[axis] * dt
 
         for axis in range(3):
             self.rot_vel[axis] += body_torque[axis] * dt
-            self.rot_vel[axis] *= max(0.0, 1.0 - self.angular_drag * dt)
+            angular_speed = abs(self.rot_vel[axis])
+            total_angular_drag = self.angular_drag + self.angular_quad_drag * angular_speed
+            self.rot_vel[axis] *= max(0.0, 1.0 - total_angular_drag * dt)
             self.rot[axis] += self.rot_vel[axis] * dt
 
 
 class Camera:
     def __init__(self):
+        self.reset()
+
+    def reset(self):
         self.yaw = 0.45
         self.pitch = -0.35
         self.distance = 8.5
@@ -357,22 +370,42 @@ def draw_rov(screen: pygame.Surface, sim: ROVSimulator, thrusters: List[float], 
         base_direction = vec_normalize(thruster.positive_direction)
         direction_world = rotate_point(tuple(base_direction), tuple(sim.rot))
 
-        color = (90, 150, 255) if thrusters[index] >= 0 else (255, 120, 80)
+        color = (90, 220, 120) if thrusters[index] >= 0 else (235, 95, 95)
         intensity = int(100 + 155 * min(1.0, abs(thrusters[index])))
         color = (min(255, color[0] + intensity // 3), min(255, color[1] + intensity // 4), min(255, color[2] + intensity // 5))
 
-        # Cylinder representation: draw axis segment plus end caps.
+        # Cylinder representation: draw a capsule shape for the body plus end caps.
         cyl_half_length = 0.22
         axis_start = vec_add(thruster.position, vec_scale(base_direction, -cyl_half_length))
         axis_end = vec_add(thruster.position, vec_scale(base_direction, cyl_half_length))
         axis_start_world = to_world(tuple(axis_start), sim)
         axis_end_world = to_world(tuple(axis_end), sim)
 
-        pygame.draw.line(screen, (160, 160, 160), world_to_screen(axis_start_world, camera), world_to_screen(axis_end_world, camera), 6)
-        pygame.draw.circle(screen, (200, 200, 210), world_to_screen(axis_start_world, camera), 5)
-        pygame.draw.circle(screen, (200, 200, 210), world_to_screen(axis_end_world, camera), 5)
+        start_px = world_to_screen(axis_start_world, camera)
+        end_px = world_to_screen(axis_end_world, camera)
+        radius = 5
 
-        thrust_tip_world = vec_add(center_world, vec_scale(direction_world, thrusters[index] * 0.65))
+        dx = end_px[0] - start_px[0]
+        dy = end_px[1] - start_px[1]
+        segment_len = math.hypot(dx, dy)
+        if segment_len > 1e-4:
+            nx = -dy / segment_len
+            ny = dx / segment_len
+            body_poly = [
+                (int(start_px[0] + nx * radius), int(start_px[1] + ny * radius)),
+                (int(end_px[0] + nx * radius), int(end_px[1] + ny * radius)),
+                (int(end_px[0] - nx * radius), int(end_px[1] - ny * radius)),
+                (int(start_px[0] - nx * radius), int(start_px[1] - ny * radius)),
+            ]
+            pygame.draw.polygon(screen, (165, 165, 172), body_poly)
+
+        pygame.draw.circle(screen, (204, 204, 212), start_px, radius)
+        pygame.draw.circle(screen, (204, 204, 212), end_px, radius)
+        pygame.draw.circle(screen, (130, 130, 140), start_px, radius, 1)
+        pygame.draw.circle(screen, (130, 130, 140), end_px, radius, 1)
+
+        # Indicator shows direction of applied push force (opposite prop wash velocity).
+        thrust_tip_world = vec_add(center_world, vec_scale(direction_world, -thrusters[index] * 0.65))
         pygame.draw.line(screen, color, center_px, world_to_screen(thrust_tip_world, camera), 4)
 
         font = pygame.font.SysFont("Consolas", 18)
@@ -405,7 +438,7 @@ def draw_hud(screen: pygame.Surface, control_input: List[float], connected: bool
     torque_text = f"Net Body Torque X/Y/Z: {sim.net_body_torque[0]:>6.2f}, {sim.net_body_torque[1]:>6.2f}, {sim.net_body_torque[2]:>6.2f}"
     screen.blit(small.render(force_text, True, (180, 255, 190)), (20, WINDOW_SIZE[1] - 54))
     screen.blit(small.render(torque_text, True, (180, 255, 190)), (20, WINDOW_SIZE[1] - 30))
-    screen.blit(small.render("Camera: arrows rotate, +/- zoom", True, (190, 200, 210)), (20, WINDOW_SIZE[1] - 78))
+    screen.blit(small.render("Camera: arrows rotate, +/- zoom, R resets sim", True, (190, 200, 210)), (20, WINDOW_SIZE[1] - 78))
 
 
 def main():
@@ -427,6 +460,9 @@ def main():
         for event in events:
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                sim.reset()
+                camera.reset()
 
         inputs.handle_events(events)
         control_input = inputs.update()
