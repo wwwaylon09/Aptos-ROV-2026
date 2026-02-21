@@ -2,6 +2,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import pygame
 
 WINDOW_SIZE = (1280, 720)
@@ -77,6 +78,16 @@ def vec_normalize(v: Sequence[float]) -> List[float]:
     return [v[0] / magnitude, v[1] / magnitude, v[2] / magnitude]
 
 
+def thruster_direction(thruster: "Thruster") -> List[float]:
+    # `positive_direction` stores a second point on the thruster axis, not a unit
+    # vector. Convert to a direction vector from motor position to that point.
+    return vec_normalize([
+        thruster.positive_direction[0] - thruster.position[0],
+        thruster.positive_direction[1] - thruster.position[1],
+        thruster.positive_direction[2] - thruster.position[2],
+    ])
+
+
 def get_controller_layout(joystick_name: str) -> Dict[str, int]:
     if "xbox" in joystick_name.lower():
         print("Using Xbox One button mapping")
@@ -96,14 +107,48 @@ class Thruster:
 # +X right, +Y up, +Z forward.
 THRUSTERS: List[Thruster] = [
     Thruster("M1", (-1.35, 0.55, 0.95), (1.35, -0.55, 0.95)),
-    Thruster("M2", (-1.35, 0.55, -0.95), (1.35, -0.55, -0.95)),
-    Thruster("M3", (-1.35, -0.55, 0.95), (1.35, 0.55, 0.95)),
+    Thruster("M2", (-1.35, 0.55, -0.95), (1.35, 0.55, -0.95)),
+    Thruster("M3", (-1.35, -0.55, 0.95), (1.35, 0.55, -0.95)),
     Thruster("M4", (-1.35, -0.55, -0.95), (1.35, 0.55, -0.95)),
-    Thruster("M5", (1.35, 0.55, 0.95), (-1.35, -0.55, 0.95)),
-    Thruster("M6", (1.35, 0.55, -0.95), (-1.35, -0.55, -0.95)),
+    Thruster("M5", (1.35, 0.55, 0.95), (-1.35, -0.55, -0.95)),
+    Thruster("M6", (1.35, 0.55, -0.95), (-1.35, -0.55, 0.95)),
     Thruster("M7", (1.35, -0.55, 0.95), (-1.35, 0.55, 0.95)),
     Thruster("M8", (1.35, -0.55, -0.95), (-1.35, 0.55, -0.95)),
 ]
+
+
+def allocate_thrusters(
+    forward_backward: float,
+    left_right: float,
+    up_down: float,
+    pitch: float,
+    yaw: float,
+    roll: float,
+) -> List[float]:
+    # Desired body wrench in body-frame axes: force X/Y/Z and torque X/Y/Z.
+    desired_wrench = np.array([
+        left_right,
+        up_down,
+        forward_backward,
+        roll,
+        yaw,
+        pitch,
+    ], dtype=float)
+
+    allocation = []
+    for thruster in THRUSTERS:
+        direction = np.array(thruster_direction(thruster), dtype=float)
+        position = np.array(thruster.position, dtype=float)
+        torque = np.cross(position, direction)
+        allocation.append(np.concatenate((direction, torque)))
+
+    allocation_matrix = np.array(allocation, dtype=float).T
+    motor_values = np.linalg.pinv(allocation_matrix) @ desired_wrench
+    max_abs = np.max(np.abs(motor_values))
+    if max_abs > 1.0:
+        motor_values = motor_values / max_abs
+
+    return [round(float(clamp(value)), 3) for value in motor_values]
 
 
 class InputModel:
@@ -214,14 +259,8 @@ class InputModel:
         up_down = 0 if abs(up_down) < DEADBAND else up_down
 
         c = self.control_input
-        c[0] = round(clamp(-forward_backward + left_right + up_down - pitch + yaw + roll), 3)
-        c[1] = round(clamp(-forward_backward - left_right + up_down - pitch - yaw - roll), 3)
-        c[2] = round(clamp(-forward_backward + left_right - up_down + pitch + yaw - roll), 3)
-        c[3] = round(clamp(-forward_backward - left_right - up_down + pitch - yaw + roll), 3)
-        c[4] = round(clamp(forward_backward + left_right + up_down + pitch - yaw + roll), 3)
-        c[5] = round(clamp(forward_backward - left_right + up_down + pitch + yaw - roll), 3)
-        c[6] = round(clamp(forward_backward + left_right - up_down - pitch - yaw - roll), 3)
-        c[7] = round(clamp(forward_backward - left_right - up_down - pitch + yaw + roll), 3)
+        motors = allocate_thrusters(forward_backward, left_right, up_down, pitch, yaw, roll)
+        c[:8] = motors
 
         c[8] = self.claw_angle
         c[9] = self.claw_rotate
@@ -258,7 +297,7 @@ class ROVSimulator:
 
         for index, thruster in enumerate(THRUSTERS):
             power = clamp(thruster_input[index])
-            direction = vec_normalize(thruster.positive_direction)
+            direction = thruster_direction(thruster)
             thruster_force = vec_scale(direction, power * self.force_gain)
             body_force = vec_add(body_force, thruster_force)
 
@@ -365,7 +404,7 @@ def draw_rov(screen: pygame.Surface, sim: ROVSimulator, thrusters: List[float], 
         center_world = to_world(thruster.position, sim)
         center_px = world_to_screen(center_world, camera)
 
-        base_direction = vec_normalize(thruster.positive_direction)
+        base_direction = thruster_direction(thruster)
         direction_world = rotate_point(tuple(base_direction), tuple(sim.rot))
 
         color = (90, 220, 120) if thrusters[index] >= 0 else (235, 95, 95)
