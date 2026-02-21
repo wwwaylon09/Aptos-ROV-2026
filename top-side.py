@@ -13,6 +13,55 @@ RECONNECT_DELAY_SECONDS = 1.0
 SOCKET_TIMEOUT_SECONDS = 2.0
 
 
+PS3_LAYOUT = {
+    "claw_angle_increase": 9,
+    "claw_angle_decrease": 8,
+    "claw_rotate_increase": 11,
+    "claw_rotate_decrease": 10,
+    "pitch_positive": 4,
+    "pitch_negative": 6,
+    "roll_positive": 5,
+    "roll_negative": 7,
+    "claw_angle_preset_low": 14,
+    "claw_angle_preset_high": 13,
+    "syringe_open": 12,
+    "syringe_close": 15,
+    "camera_zero": 1,
+    "camera_max": 2,
+    "stabilization_toggle": 3,
+}
+
+# Xbox One maps D-pad to the first hat on most drivers instead of button indices.
+XBOX_ONE_LAYOUT = {
+    "claw_angle_increase": 1,  # B
+    "claw_angle_decrease": 0,  # A
+    "claw_rotate_increase": 3,  # Y
+    "claw_rotate_decrease": 2,  # X
+    "pitch_positive": 4,  # LB
+    "pitch_negative": 6,  # View/Back
+    "roll_positive": 5,  # RB
+    "roll_negative": 7,  # Menu/Start
+    "syringe_open": "dpad_up",
+    "syringe_close": "dpad_down",
+    "claw_angle_preset_high": "dpad_left",
+    "claw_angle_preset_low": "dpad_right",
+    "camera_zero": 9,  # Left stick press
+    "camera_max": 10,  # Right stick press
+    "stabilization_toggle": 8,  # Xbox/Guide
+}
+
+
+def get_controller_layout(joystick_name: str) -> dict:
+    """Select a button map based on connected controller name."""
+    normalized_name = joystick_name.lower()
+    if "xbox" in normalized_name:
+        print("Using Xbox One button mapping")
+        return XBOX_ONE_LAYOUT
+
+    print("Using PS3 button mapping")
+    return PS3_LAYOUT
+
+
 # Initialize Pygame and joystick
 pygame.init()
 pygame.joystick.init()
@@ -21,6 +70,7 @@ pygame.joystick.init()
 got_joystick = False
 stabilization_debounce = True
 joystick: Optional[pygame.joystick.Joystick] = None
+controller_layout = PS3_LAYOUT
 
 # Initial input states
 claw_angle = 50
@@ -73,6 +123,7 @@ try:
         for event in pygame.event.get():
             if event.type == pygame.JOYDEVICEADDED:
                 joystick = pygame.joystick.Joystick(event.device_index)
+                controller_layout = get_controller_layout(joystick.get_name())
                 got_joystick = True
                 print(f"Joystick connected: {joystick.get_name()}")
             elif event.type == pygame.JOYDEVICEREMOVED:
@@ -89,38 +140,38 @@ try:
             stabilization_pressed = False
 
             # Check joystick buttons
-            for button in range(17):
+            for button in range(joystick.get_numbuttons()):
                 pressed = joystick.get_button(button)
                 if pressed:
-                    if button == 9 and claw_angle <= 179:
+                    if button == controller_layout["claw_angle_increase"] and claw_angle <= 179:
                         claw_angle += 1
-                    elif button == 8 and claw_angle >= 1:
+                    elif button == controller_layout["claw_angle_decrease"] and claw_angle >= 1:
                         claw_angle -= 1
-                    if button == 11 and claw_rotate <= 179:
+                    if button == controller_layout["claw_rotate_increase"] and claw_rotate <= 179:
                         claw_rotate += 1
-                    elif button == 10 and claw_rotate >= 1:
+                    elif button == controller_layout["claw_rotate_decrease"] and claw_rotate >= 1:
                         claw_rotate -= 1
-                    if button == 4:
+                    if button == controller_layout["pitch_positive"]:
                         pitch = 1
-                    elif button == 6:
+                    elif button == controller_layout["pitch_negative"]:
                         pitch = -1
-                    if button == 5:
+                    if button == controller_layout["roll_positive"]:
                         roll = 1
-                    elif button == 7:
+                    elif button == controller_layout["roll_negative"]:
                         roll = -1
-                    if button == 14:
+                    if button == controller_layout["claw_angle_preset_low"]:
                         claw_angle = 65
-                    if button == 13:
+                    if button == controller_layout["claw_angle_preset_high"]:
                         claw_angle = 100
-                    if button == 12:
+                    if button == controller_layout["syringe_open"]:
                         syringe_angle = 180
-                    if button == 15:
+                    if button == controller_layout["syringe_close"]:
                         syringe_angle = 0
-                    if button == 1:
+                    if button == controller_layout["camera_zero"]:
                         camera_angle = 0
-                    if button == 2:
+                    if button == controller_layout["camera_max"]:
                         camera_angle = 180
-                    if button == 3:
+                    if button == controller_layout["stabilization_toggle"]:
                         stabilization_pressed = True
 
                     control_input[8] = claw_angle
@@ -128,6 +179,23 @@ try:
                     control_input[10] = syringe_angle
                     control_input[11] = camera_angle
                     control_input[12] = enable_stabilization
+
+            if joystick.get_numhats() > 0:
+                dpad_x, dpad_y = joystick.get_hat(0)
+                if controller_layout["claw_angle_preset_low"] == "dpad_right" and dpad_x == 1:
+                    claw_angle = 65
+                if controller_layout["claw_angle_preset_high"] == "dpad_left" and dpad_x == -1:
+                    claw_angle = 100
+                if controller_layout["syringe_open"] == "dpad_up" and dpad_y == 1:
+                    syringe_angle = 180
+                if controller_layout["syringe_close"] == "dpad_down" and dpad_y == -1:
+                    syringe_angle = 0
+
+                control_input[8] = claw_angle
+                control_input[9] = claw_rotate
+                control_input[10] = syringe_angle
+                control_input[11] = camera_angle
+                control_input[12] = enable_stabilization
 
             # Check for stabilization button pressed
             if stabilization_pressed:
