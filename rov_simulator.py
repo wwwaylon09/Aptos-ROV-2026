@@ -96,14 +96,15 @@ class Thruster:
 # +X right, +Y up, +Z forward.
 # Geometry is approximated from the user-provided photos and labels.
 THRUSTERS: List[Thruster] = [
-    Thruster("M1", (-1.55, 0.05, -0.25), (1.0, 0.0, 0.0)),
-    Thruster("M2", (0.95, -0.05, -1.10), (-0.8, 0.15, 0.55)),
-    Thruster("M3", (-1.35, -0.85, 0.35), (0.0, -1.0, 0.0)),
-    Thruster("M4", (-0.25, -0.95, -1.00), (-0.6, -0.55, 0.58)),
-    Thruster("M5", (-0.55, 0.95, 0.85), (0.55, 0.62, -0.55)),
-    Thruster("M6", (1.20, 0.90, 0.35), (0.0, 1.0, 0.0)),
-    Thruster("M7", (-0.40, 0.40, 1.05), (0.8, 0.15, -0.55)),
-    Thruster("M8", (1.45, 0.00, -0.05), (-1.0, 0.0, 0.0)),
+    # Thrusters are mounted at the 8 prism corners and angled inward toward center.
+    Thruster("M1", (-1.35, -0.55, -0.95), (1.35, 0.55, 0.95)),
+    Thruster("M2", (1.35, -0.55, -0.95), (-1.35, 0.55, 0.95)),
+    Thruster("M3", (-1.35, -0.55, 0.95), (1.35, 0.55, -0.95)),
+    Thruster("M4", (1.35, -0.55, 0.95), (-1.35, 0.55, -0.95)),
+    Thruster("M5", (-1.35, 0.55, -0.95), (1.35, -0.55, 0.95)),
+    Thruster("M6", (1.35, 0.55, -0.95), (-1.35, -0.55, 0.95)),
+    Thruster("M7", (-1.35, 0.55, 0.95), (1.35, -0.55, -0.95)),
+    Thruster("M8", (1.35, 0.55, 0.95), (-1.35, -0.55, -0.95)),
 ]
 
 
