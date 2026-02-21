@@ -214,14 +214,17 @@ class InputModel:
         up_down = 0 if abs(up_down) < DEADBAND else up_down
 
         c = self.control_input
-        c[0] = round(clamp(-forward_backward + left_right + up_down - pitch + yaw + roll), 3)
-        c[1] = round(clamp(-forward_backward - left_right + up_down - pitch - yaw - roll), 3)
-        c[2] = round(clamp(-forward_backward + left_right - up_down + pitch + yaw - roll), 3)
-        c[3] = round(clamp(-forward_backward - left_right - up_down + pitch - yaw + roll), 3)
-        c[4] = round(clamp(forward_backward + left_right + up_down + pitch - yaw + roll), 3)
-        c[5] = round(clamp(forward_backward - left_right + up_down + pitch + yaw - roll), 3)
-        c[6] = round(clamp(forward_backward + left_right - up_down - pitch - yaw - roll), 3)
-        c[7] = round(clamp(forward_backward - left_right - up_down - pitch + yaw + roll), 3)
+        # Pitch and roll command channels are intentionally swapped in the motor mix.
+        # This makes the dedicated pitch buttons generate torque about the ROV's
+        # pitch axis (X in body frame) instead of canceling out.
+        c[0] = round(clamp(-forward_backward + left_right + up_down - roll + yaw + pitch), 3)
+        c[1] = round(clamp(-forward_backward - left_right + up_down - roll - yaw - pitch), 3)
+        c[2] = round(clamp(-forward_backward + left_right - up_down + roll + yaw - pitch), 3)
+        c[3] = round(clamp(-forward_backward - left_right - up_down + roll - yaw + pitch), 3)
+        c[4] = round(clamp(forward_backward + left_right + up_down + roll - yaw + pitch), 3)
+        c[5] = round(clamp(forward_backward - left_right + up_down + roll + yaw - pitch), 3)
+        c[6] = round(clamp(forward_backward + left_right - up_down - roll - yaw - pitch), 3)
+        c[7] = round(clamp(forward_backward - left_right - up_down - roll + yaw + pitch), 3)
 
         c[8] = self.claw_angle
         c[9] = self.claw_rotate
