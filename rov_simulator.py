@@ -2,6 +2,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import pygame
 
 WINDOW_SIZE = (1280, 720)
