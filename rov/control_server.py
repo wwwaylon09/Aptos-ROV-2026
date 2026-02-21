@@ -1,6 +1,7 @@
 import json
 import logging
 import math
+import os
 import signal
 import socket
 import struct
@@ -16,6 +17,7 @@ import gpiozero
 from rov.shared_config import (
     CONTROL_HEALTH_LOG_INTERVAL_SECONDS,
     HOST,
+    HUD_STATE_PATH,
     MAX_FRAME_SIZE,
     MPU_DEADBAND_DEGREES,
     NO_DATA_FAILSAFE_SECONDS,
@@ -51,10 +53,68 @@ HEALTH_STATE = {
     "packets_processed": 0,
 }
 
+HUD_LOCK = threading.Lock()
+HUD_STATE = {
+    "thrusters": [0.0] * 8,
+    "claw_angle": 0.0,
+    "claw_rotation": 0.0,
+    "syringe_angle": 0.0,
+    "camera_angle": 0.0,
+    "stabilization_enabled": False,
+    "mpu_pitch_deg": 0.0,
+    "mpu_roll_deg": 0.0,
+    "client_connected": False,
+    "updated_at": 0.0,
+}
+
 
 def _set_health(**kwargs):
     with HEALTH_LOCK:
         HEALTH_STATE.update(kwargs)
+
+
+def _hud_snapshot():
+    with HUD_LOCK:
+        return {
+            "thrusters": [round(float(value), 3) for value in HUD_STATE["thrusters"]],
+            "claw_angle": round(float(HUD_STATE["claw_angle"]), 3),
+            "claw_rotation": round(float(HUD_STATE["claw_rotation"]), 3),
+            "syringe_angle": round(float(HUD_STATE["syringe_angle"]), 3),
+            "camera_angle": round(float(HUD_STATE["camera_angle"]), 3),
+            "stabilization_enabled": bool(HUD_STATE["stabilization_enabled"]),
+            "mpu_pitch_deg": round(float(HUD_STATE["mpu_pitch_deg"]), 2),
+            "mpu_roll_deg": round(float(HUD_STATE["mpu_roll_deg"]), 2),
+            "client_connected": bool(HUD_STATE["client_connected"]),
+            "updated_at": float(HUD_STATE["updated_at"]),
+        }
+
+
+def _persist_hud_state():
+    snapshot = _hud_snapshot()
+    directory = os.path.dirname(HUD_STATE_PATH)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    temp_path = f"{HUD_STATE_PATH}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(snapshot, handle, separators=(",", ":"))
+    os.replace(temp_path, HUD_STATE_PATH)
+
+
+def _update_hud_state(inputs=None, pitch_deg=0.0, roll_deg=0.0, client_connected=None):
+    with HUD_LOCK:
+        if inputs is not None:
+            HUD_STATE["thrusters"] = [float(value) for value in inputs[:8]]
+            HUD_STATE["claw_angle"] = float(inputs[8])
+            HUD_STATE["claw_rotation"] = float(inputs[9])
+            HUD_STATE["syringe_angle"] = float(inputs[10])
+            HUD_STATE["camera_angle"] = float(inputs[11])
+            HUD_STATE["stabilization_enabled"] = bool(inputs[12])
+            HUD_STATE["mpu_pitch_deg"] = float(pitch_deg)
+            HUD_STATE["mpu_roll_deg"] = float(roll_deg)
+        if client_connected is not None:
+            HUD_STATE["client_connected"] = bool(client_connected)
+        HUD_STATE["updated_at"] = time.time()
+    _persist_hud_state()
 
 
 def convert(x):
@@ -110,6 +170,7 @@ def set_neutral_thrusters():
     pca.channels[motor_6].duty_cycle = neutral
     pca.channels[motor_7].duty_cycle = neutral
     pca.channels[motor_8].duty_cycle = neutral
+    _update_hud_state(inputs=[0.0] * 13)
 
 
 def apply_thrusters(inputs):
@@ -199,6 +260,7 @@ def run_control_server(stop_event):
             connection.settimeout(SOCKET_TIMEOUT_SECONDS)
             LOGGER.info("Control client connected: %s", client_address)
             _set_health(client_connected=True, last_packet_monotonic=time.monotonic())
+            _update_hud_state(client_connected=True)
             last_packet_time = time.monotonic()
 
             try:
@@ -225,9 +287,10 @@ def run_control_server(stop_event):
                         HEALTH_STATE["packets_processed"] += 1
 
                     try:
-                        _, _, pitch_rad, roll_rad = calculate_orientation_degrees()
+                        pitch_deg, roll_deg, pitch_rad, roll_rad = calculate_orientation_degrees()
                     except OSError as exc:
                         LOGGER.warning("MPU read failed: %s", exc)
+                        pitch_deg, roll_deg = 0.0, 0.0
                         pitch_rad, roll_rad = 0.0, 0.0
 
                     if inputs[12]:
@@ -247,6 +310,7 @@ def run_control_server(stop_event):
                         inputs[i] = clamp(inputs[i])
 
                     apply_thrusters(inputs)
+                    _update_hud_state(inputs=inputs, pitch_deg=pitch_deg, roll_deg=roll_deg)
 
             except OSError as exc:
                 LOGGER.error("Control connection error: %s", exc)
@@ -254,6 +318,7 @@ def run_control_server(stop_event):
                 set_neutral_thrusters()
                 connection.close()
                 _set_health(client_connected=False)
+                _update_hud_state(client_connected=False)
                 LOGGER.info("Control client disconnected. Waiting for reconnect")
     finally:
         set_neutral_thrusters()
@@ -269,10 +334,10 @@ def main():
     stop_event = threading.Event()
 
     def handle_shutdown(sig, frame):
+        if stop_event.is_set():
+            return
         LOGGER.info("Received signal %s, shutting down control service", sig)
         stop_event.set()
-        shutdown_hardware()
-        sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)

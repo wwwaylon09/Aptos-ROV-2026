@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import signal
@@ -10,6 +11,7 @@ from flask import Flask, Response, jsonify, render_template_string, request
 
 from rov.shared_config import (
     CAMERA_CONFIG,
+    HUD_STATE_PATH,
     RECONNECT_INTERVAL,
     VIDEO_HEALTH_LOG_INTERVAL_SECONDS,
     WEBCAM_HOST,
@@ -59,6 +61,8 @@ class Camera:
     def __init__(self, name, config):
         self.name = name
         self.camera_id = camera_url_id(name, config)
+        self.role = str(config.get("role", "viewer")).strip().lower() or "viewer"
+        self.detection_enabled = self.role == "hq"
         self.device_path = config["device_path"]
         self.width = int(config.get("width", 640))
         self.height = int(config.get("height", 480))
@@ -157,6 +161,8 @@ class Camera:
         return {
             "camera_id": self.camera_id,
             "name": self.name,
+            "role": self.role,
+            "detection_enabled": self.detection_enabled,
             "online": self.online,
             "resolution": f"{self.width}x{self.height}",
             "target_fps": self.fps,
@@ -174,6 +180,19 @@ camera_ids = {cam.camera_id: cam for cam in cameras.values()}
 if len(camera_ids) != len(cameras):
     raise ValueError("Camera IDs must be unique and URL-safe")
 START_TIME = time.time()
+DETECTION_CAMERA_IDS = {cam.camera_id for cam in cameras.values() if cam.detection_enabled}
+DEFAULT_HUD_STATE = {
+    "thrusters": [0.0] * 8,
+    "claw_angle": 0.0,
+    "claw_rotation": 0.0,
+    "syringe_angle": 0.0,
+    "camera_angle": 0.0,
+    "stabilization_enabled": False,
+    "mpu_pitch_deg": 0.0,
+    "mpu_roll_deg": 0.0,
+    "client_connected": False,
+    "updated_at": 0.0,
+}
 
 
 def generate_frames(cam: Camera):
@@ -194,15 +213,31 @@ def _service_status():
     }
 
 
+def _hud_status():
+    try:
+        with open(HUD_STATE_PATH, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+
+    state = DEFAULT_HUD_STATE.copy()
+    if isinstance(payload, dict):
+        state.update(payload)
+    return state
+
+
 def _normalize_detection(detection):
     if not isinstance(detection, dict):
         raise ValueError("Each detection must be an object")
 
-    camera_id = str(detection.get("camera_id", "")).strip()
+    camera_id = str(detection.get("camera_id", "")).strip().lower()
     label = str(detection.get("label", "")).strip()
 
     if not camera_id:
         raise ValueError("camera_id is required")
+    if camera_id not in DETECTION_CAMERA_IDS:
+        allowed = ", ".join(sorted(DETECTION_CAMERA_IDS)) or "none"
+        raise ValueError(f"camera_id '{camera_id}' is not configured for detection (allowed: {allowed})")
     if not label:
         raise ValueError("label is required")
 
@@ -265,6 +300,7 @@ def status():
         "service": _service_status(),
         "cameras": {name: cam.get_status() for name, cam in cameras.items()},
         "detections": _latest_detections_snapshot(),
+        "hud": _hud_status(),
     }
 
 
@@ -323,6 +359,8 @@ def cv_status():
             cam_id: {
                 "camera_id": cam.camera_id,
                 "name": cam.name,
+                "role": cam.role,
+                "detection_enabled": cam.detection_enabled,
                 "resolution": f"{cam.width}x{cam.height}",
                 "target_fps": cam.fps,
                 "online": cam.get_status()["online"],
@@ -342,9 +380,9 @@ def index():
         <article class="camera-tile" id="{dom_id}" data-camera-name="{name}" style="--tile-ratio: {cam.aspect_ratio};">
             <img src="/video/{name}" class="camera-img" alt="{name} feed" loading="lazy">
             <div class="no-signal-label">NO SIGNAL</div>
-            <div class="detections-panel" aria-live="polite">No recent detections</div>
+            <div class="detections-panel{' empty' if not cam.detection_enabled else ''}" aria-live="polite" {'data-detection-enabled="false"' if not cam.detection_enabled else ''}>{'Viewer camera' if not cam.detection_enabled else 'No recent detections'}</div>
             <div class="camera-label">{name}</div>
-            <div class="camera-meta">{cam.width}x{cam.height} @ {cam.fps} FPS</div>
+            <div class="camera-meta">{cam.width}x{cam.height} @ {cam.fps} FPS • {cam.role.upper()}</div>
         </article>
         """
 
@@ -358,7 +396,21 @@ def index():
             :root {{ --gap: 8px; --tile-border: #2b2b2e; --label-bg: rgba(0,0,0,0.62); }}
             * {{ box-sizing: border-box; }}
             html, body {{ margin: 0; min-height: 100%; background: #111; color: #ddd; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }}
-            .layout {{ display: grid; grid-template-columns: 1fr; min-height: 100vh; gap: var(--gap); padding: var(--gap); }}
+            .layout {{ display: grid; grid-template-columns: 1fr minmax(270px, 330px); min-height: 100vh; gap: var(--gap); padding: var(--gap); }}
+            .hud {{ border: 1px solid #252527; border-radius: 6px; padding: 14px; background: rgba(15, 15, 18, 0.9); min-height: 0; }}
+            .hud h2 {{ margin: 0 0 10px; font-size: 18px; color: #e7e7ea; }}
+            .hud-grid {{ display: grid; gap: 9px; }}
+            .hud-row {{ display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px dashed #252529; padding-bottom: 6px; }}
+            .hud-label {{ color: #9898a3; font-size: 13px; }}
+            .hud-value {{ color: #f2f2f5; font-weight: 600; font-variant-numeric: tabular-nums; }}
+            .connected-yes, .state-enabled {{ color: #39c66d; }}
+            .connected-no, .state-disabled {{ color: #ff6868; }}
+            .thruster-list {{ list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }}
+            .thruster-item {{ display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }}
+            .thruster-name {{ color: #9898a3; font-size: 12px; min-width: 64px; }}
+            .thruster-bar {{ height: 8px; border-radius: 999px; background: #1f1f22; overflow: hidden; border: 1px solid #2b2b30; }}
+            .thruster-fill {{ height: 100%; width: 50%; background: linear-gradient(90deg, #39c66d, #e9c23f, #e25a5a); transition: width .18s linear; }}
+            .thruster-value {{ color: #dfdfe5; font-size: 12px; min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; }}
             .camera-column {{ min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); align-content: start; }}
             .camera-tile {{ position: relative; width: 100%; aspect-ratio: var(--tile-ratio, 4 / 3); background: #000; border: 1px solid var(--tile-border); border-radius: 6px; overflow: hidden; }}
             .camera-img {{ width: 100%; height: 100%; display: block; object-fit: cover; background: #000; }}
@@ -371,13 +423,49 @@ def index():
             .no-signal-label {{ position: absolute; inset: 0; display: none; align-items: center; justify-content: center; font-size: clamp(18px, 2.8vw, 30px); font-weight: bold; color: #ff4141; background: rgba(0,0,0,0.76); }}
             .camera-tile.no-signal img {{ display: none; }}
             .camera-tile.no-signal .no-signal-label {{ display: flex; }}
-            @media (max-width: 1100px) {{ .camera-column {{ grid-template-columns: 1fr; }} }}
+            @media (max-width: 1200px) {{ .layout {{ grid-template-columns: 1fr; }} .camera-column {{ grid-template-columns: 1fr; }} }}
         </style>
 
         <script>
         const previousState = new Map();
         const latestDetectionByCamera = new Map();
         const DETECTION_UI_TTL_MS = {int(DETECTION_TTL_SECONDS * 1000)};
+        const asNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+        const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+        const thrusterPct = (value) => (clamp((asNumber(value) + 1) / 2, 0, 1) * 100);
+        const formatInput = (value) => asNumber(value).toFixed(2);
+
+        function updateHud(hud) {{
+            if (!hud) return;
+            const connected = Boolean(hud.client_connected);
+            const connectedEl = document.getElementById("hud-client-connected");
+            connectedEl.textContent = connected ? "Connected" : "Disconnected";
+            connectedEl.classList.toggle("connected-yes", connected);
+            connectedEl.classList.toggle("connected-no", !connected);
+
+            const stabilizationEl = document.getElementById("hud-stabilization");
+            const stabilizationEnabled = Boolean(hud.stabilization_enabled);
+            stabilizationEl.textContent = stabilizationEnabled ? "Enabled" : "Disabled";
+            stabilizationEl.classList.toggle("state-enabled", stabilizationEnabled);
+            stabilizationEl.classList.toggle("state-disabled", !stabilizationEnabled);
+
+            document.getElementById("hud-claw-angle").textContent = formatInput(hud.claw_angle) + "°";
+            document.getElementById("hud-claw-rotation").textContent = formatInput(hud.claw_rotation) + "°";
+            document.getElementById("hud-syringe-angle").textContent = formatInput(hud.syringe_angle) + "°";
+            document.getElementById("hud-camera-angle").textContent = formatInput(hud.camera_angle) + "°";
+            document.getElementById("hud-mpu-pitch").textContent = formatInput(hud.mpu_pitch_deg) + "°";
+            document.getElementById("hud-mpu-roll").textContent = formatInput(hud.mpu_roll_deg) + "°";
+
+            const thrusters = Array.isArray(hud.thrusters) ? hud.thrusters : [];
+            for (let i = 0; i < 8; i++) {{
+                const inputValue = thrusters[i] ?? 0;
+                const fill = document.getElementById(`thruster-fill-${{i + 1}}`);
+                const valueEl = document.getElementById(`thruster-value-${{i + 1}}`);
+                if (!fill || !valueEl) continue;
+                fill.style.width = `${{thrusterPct(inputValue)}}%`;
+                valueEl.textContent = formatInput(inputValue);
+            }}
+        }}
 
         function normalizeDetectionTimestampMs(detectionBlock) {{
             if (!detectionBlock || !Array.isArray(detectionBlock.detections) || detectionBlock.detections.length === 0) return null;
@@ -389,6 +477,11 @@ def index():
         function renderDetections(tile, detections) {{
             const panel = tile.querySelector(".detections-panel");
             if (!panel) return;
+            if (panel.dataset.detectionEnabled === "false") {{
+                panel.classList.add("empty");
+                panel.textContent = "Viewer camera";
+                return;
+            }}
             if (!detections || detections.length === 0) {{
                 panel.classList.add("empty");
                 panel.textContent = "No recent detections";
@@ -397,16 +490,30 @@ def index():
 
             panel.classList.remove("empty");
             const entries = detections
-                .map((item) => `\n<li>${{item.label}} (${{(Number(item.confidence) * 100).toFixed(0)}}%) [${{item.bbox.join(",")}}]</li>`)
+                .map((item) => {{
+                    const bbox = Array.isArray(item.bbox) ? item.bbox.join(",") : "n/a";
+                    const confidence = Number(item.confidence);
+                    const confidencePct = Number.isFinite(confidence) ? (confidence * 100).toFixed(0) : "?";
+                    return `
+<li>${{item.label || "Unknown"}} (${{confidencePct}}%) [${{bbox}}]</li>`;
+                }})
                 .join("");
-            panel.innerHTML = `<ul>${{entries}}\n</ul>`;
+            panel.innerHTML = `<ul>${{entries}}
+</ul>`;
         }}
 
         async function updateStatus() {{
-            const res = await fetch("/status");
-            const data = await res.json();
+            let data;
+            try {{
+                const res = await fetch("/status");
+                data = await res.json();
+            }} catch (error) {{
+                console.error("HUD status refresh failed", error);
+                return;
+            }}
             const cameraData = data.cameras || {{}};
             const detectionsByCamera = data.detections || {{}};
+            updateHud(data.hud || {{}});
             for (const [name, details] of Object.entries(cameraData)) {{
                 const tile = document.querySelector(`[data-camera-name="${{name}}"]`);
                 if (!tile) continue;
@@ -445,6 +552,25 @@ def index():
     <body>
         <main class="layout">
             <section class="camera-column">{tiles}</section>
+            <aside class="hud">
+                <h2>Vehicle Status</h2>
+                <div class="hud-grid">
+                    <div class="hud-row"><span class="hud-label">Client</span><span class="hud-value connected-no" id="hud-client-connected">Disconnected</span></div>
+                    <div class="hud-row"><span class="hud-label">Stabilization</span><span class="hud-value" id="hud-stabilization">Disabled</span></div>
+                    <div class="hud-row"><span class="hud-label">Claw angle</span><span class="hud-value" id="hud-claw-angle">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">Claw rotation</span><span class="hud-value" id="hud-claw-rotation">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">Syringe angle</span><span class="hud-value" id="hud-syringe-angle">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">Camera angle</span><span class="hud-value" id="hud-camera-angle">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">MPU pitch</span><span class="hud-value" id="hud-mpu-pitch">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">MPU roll</span><span class="hud-value" id="hud-mpu-roll">0.00°</span></div>
+                    <div>
+                        <div class="hud-label" style="margin-bottom: 6px;">Thruster power</div>
+                        <ul class="thruster-list">
+                            {''.join([f'<li class="thruster-item"><span class="thruster-name">Thruster {i}</span><div class="thruster-bar"><div class="thruster-fill" id="thruster-fill-{i}"></div></div><span class="thruster-value" id="thruster-value-{i}">0.00</span></li>' for i in range(1, 9)])}
+                        </ul>
+                    </div>
+                </div>
+            </aside>
         </main>
     </body>
     </html>
