@@ -97,11 +97,11 @@ class Thruster:
 # +X right, +Y up, +Z forward.
 THRUSTERS: List[Thruster] = [
     Thruster("M1", (-1.35, 0.55, 0.95), (1.35, -0.55, 0.95)),
-    Thruster("M2", (-1.35, 0.55, -0.95), (1.35, 0.55, -0.95)),
-    Thruster("M3", (-1.35, -0.55, 0.95), (1.35, 0.55, -0.95)),
+    Thruster("M2", (-1.35, 0.55, -0.95), (1.35, -0.55, -0.95)),
+    Thruster("M3", (-1.35, -0.55, 0.95), (1.35, 0.55, 0.95)),
     Thruster("M4", (-1.35, -0.55, -0.95), (1.35, 0.55, -0.95)),
-    Thruster("M5", (1.35, 0.55, 0.95), (-1.35, -0.55, -0.95)),
-    Thruster("M6", (1.35, 0.55, -0.95), (-1.35, -0.55, 0.95)),
+    Thruster("M5", (1.35, 0.55, 0.95), (1.35, 0.55, -0.95)),
+    Thruster("M6", (1.35, 0.55, -0.95), (1.35, 0.55, 0.95)),
     Thruster("M7", (1.35, -0.55, 0.95), (-1.35, 0.55, 0.95)),
     Thruster("M8", (1.35, -0.55, -0.95), (-1.35, 0.55, -0.95)),
 ]
@@ -117,7 +117,7 @@ def allocate_thrusters(
 ) -> List[float]:
     # Desired body wrench in body-frame axes: force X/Y/Z and torque X/Y/Z.
     desired_wrench = np.array([
-        left_right,
+        forward_backward,
         up_down,
         forward_backward,
         roll,
