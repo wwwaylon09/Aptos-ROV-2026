@@ -380,9 +380,9 @@ def index():
         <article class="camera-tile" id="{dom_id}" data-camera-name="{name}" style="--tile-ratio: {cam.aspect_ratio};">
             <img src="/video/{name}" class="camera-img" alt="{name} feed" loading="lazy">
             <div class="no-signal-label">NO SIGNAL</div>
-            <div class="detections-panel{' empty' if not cam.detection_enabled else ''}" aria-live="polite" {'data-detection-enabled="false"' if not cam.detection_enabled else ''}>{'Viewer camera' if not cam.detection_enabled else 'No recent detections'}</div>
+            <div class="detections-panel{' empty' if not cam.detection_enabled else ''}" aria-live="polite" {'data-detection-enabled="false"' if not cam.detection_enabled else ''}>{'No recent detections'}</div>
             <div class="camera-label">{name}</div>
-            <div class="camera-meta">{cam.width}x{cam.height} @ {cam.fps} FPS • {cam.role.upper()}</div>
+            <div class="camera-meta">{cam.width}x{cam.height} @ {cam.fps} FPS</div>
         </article>
         """
 
@@ -396,8 +396,8 @@ def index():
             :root {{ --gap: 8px; --tile-border: #2b2b2e; --label-bg: rgba(0,0,0,0.62); }}
             * {{ box-sizing: border-box; }}
             html, body {{ margin: 0; min-height: 100%; background: #111; color: #ddd; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }}
-            .layout {{ display: grid; grid-template-columns: 1fr minmax(270px, 330px); min-height: 100vh; gap: var(--gap); padding: var(--gap); }}
-            .hud {{ border: 1px solid #252527; border-radius: 6px; padding: 14px; background: rgba(15, 15, 18, 0.9); min-height: 0; }}
+            .layout {{ display: grid; grid-template-columns: 1fr minmax(270px, 330px); height: 100vh; gap: var(--gap); padding: var(--gap); overflow: hidden; }}
+            .hud {{ border: 1px solid #252527; border-radius: 6px; padding: 14px; background: rgba(15, 15, 18, 0.9); min-height: 0; overflow: auto; }}
             .hud h2 {{ margin: 0 0 10px; font-size: 18px; color: #e7e7ea; }}
             .hud-grid {{ display: grid; gap: 9px; }}
             .hud-row {{ display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px dashed #252529; padding-bottom: 6px; }}
@@ -411,8 +411,8 @@ def index():
             .thruster-bar {{ height: 8px; border-radius: 999px; background: #1f1f22; overflow: hidden; border: 1px solid #2b2b30; }}
             .thruster-fill {{ height: 100%; width: 50%; background: linear-gradient(90deg, #39c66d, #e9c23f, #e25a5a); transition: width .18s linear; }}
             .thruster-value {{ color: #dfdfe5; font-size: 12px; min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; }}
-            .camera-column {{ min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); align-content: start; }}
-            .camera-tile {{ position: relative; width: 100%; aspect-ratio: var(--tile-ratio, 4 / 3); background: #000; border: 1px solid var(--tile-border); border-radius: 6px; overflow: hidden; }}
+            .camera-column {{ min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); gap: var(--gap); align-content: stretch; }}
+            .camera-tile {{ position: relative; width: 100%; height: 100%; min-height: 0; background: #000; border: 1px solid var(--tile-border); border-radius: 6px; overflow: hidden; }}
             .camera-img {{ width: 100%; height: 100%; display: block; object-fit: cover; background: #000; }}
             .camera-label, .camera-meta {{ position: absolute; left: 8px; font-size: 13px; background: var(--label-bg); color: #f0f0f0; padding: 2px 7px; border-radius: 4px; }}
             .camera-label {{ bottom: 34px; font-weight: 600; }}
@@ -423,7 +423,7 @@ def index():
             .no-signal-label {{ position: absolute; inset: 0; display: none; align-items: center; justify-content: center; font-size: clamp(18px, 2.8vw, 30px); font-weight: bold; color: #ff4141; background: rgba(0,0,0,0.76); }}
             .camera-tile.no-signal img {{ display: none; }}
             .camera-tile.no-signal .no-signal-label {{ display: flex; }}
-            @media (max-width: 1200px) {{ .layout {{ grid-template-columns: 1fr; }} .camera-column {{ grid-template-columns: 1fr; }} }}
+            @media (max-width: 1200px) {{ .layout {{ grid-template-columns: 1fr; height: auto; overflow: visible; }} .camera-column {{ grid-template-columns: 1fr; grid-auto-rows: auto; }} .camera-tile {{ aspect-ratio: var(--tile-ratio, 4 / 3); height: auto; }} }}
         </style>
 
         <script>
@@ -479,7 +479,7 @@ def index():
             if (!panel) return;
             if (panel.dataset.detectionEnabled === "false") {{
                 panel.classList.add("empty");
-                panel.textContent = "Viewer camera";
+                panel.textContent = "No recent detections";
                 return;
             }}
             if (!detections || detections.length === 0) {{
