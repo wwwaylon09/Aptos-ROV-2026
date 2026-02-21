@@ -97,14 +97,14 @@ class Thruster:
 # Geometry is approximated from the user-provided photos and labels.
 THRUSTERS: List[Thruster] = [
     # Thrusters are mounted at the 8 prism corners and angled inward toward center.
-    Thruster("M1", (-1.35, 0.55, 0.95), (-1.35, 0.55, -0.95)),
-    Thruster("M2", (-1.35, 0.55, -0.95), (-1.35, 0.55, 0.95)),
-    Thruster("M3", (-1.35, -0.55, 0.95), (-1.35, -0.55, -0.95)),
-    Thruster("M4", (-1.35, -0.55, -0.95), (-1.35, -0.55, 0.95)),
-    Thruster("M5", (1.35, 0.55, 0.95), (1.35, 0.55, -0.95)),
-    Thruster("M6", (1.35, 0.55, -0.95), (1.35, 0.55, 0.95)),
-    Thruster("M7", (1.35, -0.55, 0.95), (1.35, -0.55, -0.95)),
-    Thruster("M8", (1.35, -0.55, -0.95), (1.35, -0.55, 0.95)),
+    Thruster("M1", (-1.35, 0.55, 0.95), (1.35, -0.55, 0.95)),
+    Thruster("M2", (-1.35, 0.55, -0.95), (1.35, -0.55, -0.95)),
+    Thruster("M3", (-1.35, -0.55, 0.95), (1.35, 0.55, 0.95)),
+    Thruster("M4", (-1.35, -0.55, -0.95), (1.35, 0.55, -0.95)),
+    Thruster("M5", (1.35, 0.55, 0.95), (-1.35, -0.55, 0.95)),
+    Thruster("M6", (1.35, 0.55, -0.95), (-1.35, -0.55, -0.95)),
+    Thruster("M7", (1.35, -0.55, 0.95), (-1.35, 0.55, 0.95)),
+    Thruster("M8", (1.35, -0.55, -0.95), (-1.35, 0.55, -0.95)),
 ]
 
 
@@ -216,14 +216,14 @@ class InputModel:
         up_down = 0 if abs(up_down) < DEADBAND else up_down
 
         c = self.control_input
-        c[0] = round(clamp(-forward_backward + left_right + up_down - pitch + yaw + roll), 3)
-        c[1] = round(clamp(-forward_backward - left_right + up_down - pitch - yaw - roll), 3)
-        c[2] = round(clamp(-forward_backward + left_right - up_down + pitch + yaw - roll), 3)
-        c[3] = round(clamp(-forward_backward - left_right - up_down + pitch - yaw + roll), 3)
-        c[4] = round(clamp(forward_backward + left_right + up_down + pitch - yaw + roll), 3)
-        c[5] = round(clamp(forward_backward - left_right + up_down + pitch + yaw - roll), 3)
-        c[6] = round(clamp(forward_backward + left_right - up_down - pitch - yaw - roll), 3)
-        c[7] = round(clamp(forward_backward - left_right - up_down - pitch + yaw + roll), 3)
+        c[0] = round(clamp(-forward_backward + left_right + up_down + pitch + yaw + roll), 3)
+        c[1] = round(clamp(-forward_backward - left_right + up_down + pitch - yaw - roll), 3)
+        c[2] = round(clamp(-forward_backward + left_right - up_down - pitch + yaw - roll), 3)
+        c[3] = round(clamp(-forward_backward - left_right - up_down - pitch - yaw + roll), 3)
+        c[4] = round(clamp(forward_backward + left_right + up_down - pitch - yaw + roll), 3)
+        c[5] = round(clamp(forward_backward - left_right + up_down - pitch + yaw - roll), 3)
+        c[6] = round(clamp(forward_backward + left_right - up_down + pitch - yaw - roll), 3)
+        c[7] = round(clamp(forward_backward - left_right - up_down + pitch + yaw + roll), 3)
 
         c[8] = self.claw_angle
         c[9] = self.claw_rotate
