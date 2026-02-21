@@ -13,10 +13,12 @@ WEBCAM_PORT = int(os.getenv("ROV_WEBCAM_PORT", "5001"))
 HUD_UPDATE_INTERVAL_SECONDS = float(os.getenv("ROV_HUD_UPDATE_INTERVAL_SECONDS", "0.2"))
 RECONNECT_INTERVAL = float(os.getenv("ROV_CAMERA_RECONNECT_INTERVAL_SECONDS", "3.0"))
 VIDEO_HEALTH_LOG_INTERVAL_SECONDS = float(os.getenv("ROV_VIDEO_HEALTH_LOG_INTERVAL_SECONDS", "10"))
+HUD_STATE_PATH = os.getenv("ROV_HUD_STATE_PATH", "/tmp/rov_hud_state.json")
 
 CAMERA_CONFIG = {
     "Camera 1": {
         "id": "camera-1",
+        "role": "viewer",
         "device_path": "/dev/v4l/by-path/platform-xhci-hcd.1-usb-0:1:1.0-video-index0",
         "width": 640,
         "height": 480,
@@ -25,6 +27,7 @@ CAMERA_CONFIG = {
     },
     "Camera 2": {
         "id": "camera-2",
+        "role": "viewer",
         "device_path": "/dev/v4l/by-path/platform-xhci-hcd.0-usb-0:1:1.0-video-index0",
         "width": 640,
         "height": 480,
@@ -33,6 +36,7 @@ CAMERA_CONFIG = {
     },
     "Camera 3": {
         "id": "camera-3",
+        "role": "viewer",
         "device_path": "/dev/v4l/by-path/platform-xhci-hcd.0-usb-0:2:1.0-video-index0",
         "width": 640,
         "height": 480,
@@ -41,6 +45,7 @@ CAMERA_CONFIG = {
     },
     "Camera 4": {
         "id": "camera-4",
+        "role": "hq",
         "device_path": "/dev/v4l/by-path/platform-xhci-hcd.1-usb-0:2:1.0-video-index0",
         "width": 1920,
         "height": 1080,
