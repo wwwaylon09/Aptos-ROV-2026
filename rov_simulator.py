@@ -163,8 +163,16 @@ def calculate_orientation_from_sim(sim: "ROVSimulator") -> Tuple[float, float]:
     # Use world-up in body frame, then remap to MPU-style axes expected by
     # bottom-side.py formulas so yaw does not appear as pitch.
     body_right, body_up, body_forward = quat_rotate((0.0, 1.0, 0.0), quat_conjugate(sim.orientation))
+
+    # Align simulator body axes (+X right, +Y up, +Z forward) with the MPU axis
+    # convention used in bottom-side.py's pitch/roll equations.
+    #
+    # In this project, the thruster mixing labels pitch/roll opposite to strict
+    # aerospace naming, so we intentionally map MPU pitch to body-right tilt and
+    # MPU roll to body-forward tilt. This preserves expected control behavior
+    # while still preventing heading (yaw about +Y) from leaking into MPU pitch.
     accel_x = body_right
-    accel_y = -body_forward
+    accel_y = body_forward
     accel_z = body_up
 
     pitch = math.atan2(accel_x, math.sqrt(accel_y**2 + accel_z**2))
