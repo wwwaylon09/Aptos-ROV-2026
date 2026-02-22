@@ -343,14 +343,17 @@ def rotate_point(point: Tuple[float, float, float], rotation: Tuple[float, float
     x, y, z = point
     pitch, yaw, roll = rotation
 
-    cy, sy = math.cos(yaw), math.sin(yaw)
-    x, z = x * cy + z * sy, -x * sy + z * cy
+    # Apply intrinsic body rotations as roll -> pitch -> yaw.
+    # This yields body-to-world transform R = R_y(yaw) * R_x(pitch) * R_z(roll),
+    # so pitch remains relative to the current yawed heading.
+    cr, sr = math.cos(roll), math.sin(roll)
+    x, y = x * cr - y * sr, x * sr + y * cr
 
     cp, sp = math.cos(pitch), math.sin(pitch)
     y, z = y * cp - z * sp, y * sp + z * cp
 
-    cr, sr = math.cos(roll), math.sin(roll)
-    x, y = x * cr - y * sr, x * sr + y * cr
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    x, z = x * cy + z * sy, -x * sy + z * cy
     return [x, y, z]
 
 
