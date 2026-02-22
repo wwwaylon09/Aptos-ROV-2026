@@ -8,7 +8,7 @@ from typing import Optional
 SERVER_IP = "192.168.42.42"  # Change to the server's IP address
 SERVER_PORT = 5000
 SEND_HZ = 50
-DEADBAND = 0.05
+DEADBAND = 0.1
 RECONNECT_DELAY_SECONDS = 1.0
 SOCKET_TIMEOUT_SECONDS = 2.0
 
