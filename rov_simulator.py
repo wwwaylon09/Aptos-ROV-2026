@@ -18,8 +18,8 @@ PS3_LAYOUT = {
     "claw_angle_decrease": 8,
     "claw_rotate_increase": 11,
     "claw_rotate_decrease": 10,
-    "pitch_positive": 4,
-    "pitch_negative": 6,
+    "pitch_positive": 6,
+    "pitch_negative": 4,
     "roll_positive": 5,
     "roll_negative": 7,
     "claw_angle_preset_low": 14,
@@ -36,14 +36,14 @@ XBOX_ONE_LAYOUT = {
     "claw_angle_decrease": 0,
     "claw_rotate_increase": 3,
     "claw_rotate_decrease": 2,
-    "pitch_positive": 4,
-    "pitch_negative": 6,
-    "roll_positive": 5,
-    "roll_negative": 7,
+    "pitch_positive": 6,
+    "pitch_negative": 4,
+    "roll_positive": "dpad_left",
+    "roll_negative": "dpad_right",
     "syringe_open": "dpad_up",
     "syringe_close": "dpad_down",
-    "claw_angle_preset_high": "dpad_left",
-    "claw_angle_preset_low": "dpad_right",
+    "claw_angle_preset_high": 5,
+    "claw_angle_preset_low": 7,
     "camera_zero": 9,
     "camera_max": 10,
     "stabilization_toggle": 8,
@@ -94,15 +94,15 @@ class Thruster:
 
 # Body frame convention:
 # +X right, +Y up, +Z forward.
-THRUSTERS: List[Thruster] = [
-    Thruster("M1", (-1.35, 0.55, 0.95), (1.35, -0.55, 0.95)),
-    Thruster("M2", (-1.35, 0.55, -0.95), (1.35, -0.55, -0.95)),
-    Thruster("M3", (-1.35, -0.55, 0.95), (1.35, 0.55, 0.95)),
-    Thruster("M4", (-1.35, -0.55, -0.95), (1.35, 0.55, -0.95)),
-    Thruster("M5", (1.35, 0.55, 0.95), (-1.35, -0.55, 0.95)),
-    Thruster("M6", (1.35, 0.55, -0.95), (-1.35, -0.55, -0.95)),
-    Thruster("M7", (1.35, -0.55, 0.95), (-1.35, 0.55, 0.95)),
-    Thruster("M8", (1.35, -0.55, -0.95), (-1.35, 0.55, -0.95)),
+THRUSTERS = [
+    Thruster("M1", (-1.35,  0.55,  0.95), ( 0.612, -0.5,  0.612)),
+    Thruster("M2", (-1.35,  0.55, -0.95), ( 0.612, -0.5, -0.612)),
+    Thruster("M3", (-1.35, -0.55,  0.95), ( 0.612,  0.5,  0.612)),
+    Thruster("M4", (-1.35, -0.55, -0.95), ( 0.612,  0.5, -0.612)),
+    Thruster("M5", ( 1.35,  0.55,  0.95), (-0.612, -0.5,  0.612)),
+    Thruster("M6", ( 1.35,  0.55, -0.95), (-0.612, -0.5, -0.612)),
+    Thruster("M7", ( 1.35, -0.55,  0.95), (-0.612,  0.5,  0.612)),
+    Thruster("M8", ( 1.35, -0.55, -0.95), (-0.612,  0.5, -0.612)),
 ]
 
 
@@ -403,7 +403,7 @@ def draw_rov(screen: pygame.Surface, sim: ROVSimulator, thrusters: List[float], 
         pygame.draw.circle(screen, (130, 130, 140), end_px, radius, 1)
 
         # Indicator shows direction of applied push force (opposite prop wash velocity).
-        thrust_tip_world = vec_add(center_world, vec_scale(direction_world, -thrusters[index] * 0.65))
+        thrust_tip_world = vec_add(center_world, vec_scale(direction_world, thrusters[index] * 0.65))
         pygame.draw.line(screen, color, center_px, world_to_screen(thrust_tip_world, camera), 4)
 
         font = pygame.font.SysFont("Consolas", 18)
@@ -442,7 +442,7 @@ def draw_hud(screen: pygame.Surface, control_input: List[float], connected: bool
 def main():
     pygame.init()
     pygame.joystick.init()
-    pygame.display.set_caption("ROV 8-Thruster Simulator")
+    pygame.display.set_caption("ROV Simulator")
     screen = pygame.display.set_mode(WINDOW_SIZE)
     clock = pygame.time.Clock()
 
