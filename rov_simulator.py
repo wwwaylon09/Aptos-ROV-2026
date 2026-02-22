@@ -461,7 +461,7 @@ class Camera:
         self.reset()
 
     def reset(self):
-        self.yaw = 0.45
+        self.yaw = math.pi/2
         self.pitch = -0.35
         self.distance = 8.5
 
