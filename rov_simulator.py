@@ -16,7 +16,7 @@ CAMERA_ZOOM_SPEED = 3.5
 CAMERA_FOLLOW_SMOOTHING = 6.0
 CAMERA_FOCAL_LENGTH = 520.0
 CAMERA_NEAR_PLANE = 0.25
-CAMERA_SCREEN_LIMIT = 20000
+CAMERA_SCREEN_LIMIT = 1_000_000
 FLOOR_Y = -3.0
 
 PS3_LAYOUT = {
@@ -566,7 +566,7 @@ def project_segment(
     end_world: Sequence[float],
     camera: Camera,
     basis: Optional[CameraBasis] = None,
-) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
     camera_pos, right, up, forward = basis if basis is not None else camera_basis(camera)
 
     def to_view(point_world: Sequence[float]) -> List[float]:
@@ -604,16 +604,18 @@ def project_segment(
         else:
             end_view = clipped_point
 
-    def view_to_screen(point_view: Sequence[float]) -> Optional[Tuple[int, int]]:
+    def view_to_screen(point_view: Sequence[float]) -> Optional[Tuple[float, float]]:
         if not all(math.isfinite(v) for v in point_view):
             return None
         x = point_view[0] * CAMERA_FOCAL_LENGTH / point_view[2] + WINDOW_SIZE[0] / 2
         y = -point_view[1] * CAMERA_FOCAL_LENGTH / point_view[2] + WINDOW_SIZE[1] / 2
         if not (math.isfinite(x) and math.isfinite(y)):
             return None
+        # Keep extremely large values out of the rasterizer while still allowing
+        # lines to be clipped by the screen edge for steep camera angles.
         if abs(x) > CAMERA_SCREEN_LIMIT or abs(y) > CAMERA_SCREEN_LIMIT:
             return None
-        return int(x), int(y)
+        return x, y
 
     start_px = view_to_screen(start_view)
     end_px = view_to_screen(end_view)
@@ -739,7 +741,12 @@ def draw_pool_floor(screen: pygame.Surface, camera: Camera):
         )
         if projected is not None:
             start, end = projected
-            pygame.draw.line(screen, axis_color if index == 0 else line_color, start, end, 2 if index == 0 else 1)
+            color = axis_color if index == 0 else line_color
+            width = 2 if index == 0 else 1
+            pygame.draw.line(screen, color, start, end, width)
+            # Subpixel anti-aliased pass to keep distant lines visible when
+            # perspective shrinks them below a full pixel.
+            pygame.draw.aaline(screen, color, start, end)
 
     for index in range(-half_extent, half_extent + 1):
         z = (origin_z + index) * grid_spacing
@@ -751,7 +758,10 @@ def draw_pool_floor(screen: pygame.Surface, camera: Camera):
         )
         if projected is not None:
             start, end = projected
-            pygame.draw.line(screen, axis_color if index == 0 else line_color, start, end, 2 if index == 0 else 1)
+            color = axis_color if index == 0 else line_color
+            width = 2 if index == 0 else 1
+            pygame.draw.line(screen, color, start, end, width)
+            pygame.draw.aaline(screen, color, start, end)
 
 
 def draw_hud(
