@@ -598,6 +598,14 @@ def draw_rov(screen: pygame.Surface, sim: ROVSimulator, thrusters: List[float], 
     if back_px is not None:
         screen.blit(label_font.render("BACK", True, (255, 190, 120)), (back_px[0] - 28, back_px[1] - 26))
 
+    label_font = pygame.font.SysFont("Consolas", 18)
+    front_center_world = to_world((-half[0], 0.0, 0.0), sim)
+    back_center_world = to_world((half[0], 0.0, 0.0), sim)
+    front_px = world_to_screen(front_center_world, camera)
+    back_px = world_to_screen(back_center_world, camera)
+    screen.blit(label_font.render("FRONT", True, (255, 240, 120)), (front_px[0] - 36, front_px[1] - 26))
+    screen.blit(label_font.render("BACK", True, (255, 190, 120)), (back_px[0] - 28, back_px[1] - 26))
+
     for index, thruster in enumerate(THRUSTERS):
         center_world = to_world(thruster.position, sim)
         center_px = world_to_screen(center_world, camera)
@@ -693,6 +701,9 @@ def draw_hud(
     for i in range(8):
         text = f"M{i + 1}: {control_input[i]:>6.3f}"
         screen.blit(font.render(text, True, (220, 230, 255)), (20, 60 + i * 24))
+
+    screen.blit(font.render("FRONT: M1-M4", True, (255, 240, 120)), (20, 60 + 8 * 24 + 12))
+    screen.blit(font.render("BACK:  M5-M8", True, (255, 190, 120)), (20, 60 + 9 * 24 + 12))
 
     telemetry = [
         f"Claw Angle: {control_input[8]:>5.1f}",
