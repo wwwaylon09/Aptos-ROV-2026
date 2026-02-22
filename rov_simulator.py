@@ -561,6 +561,67 @@ def world_to_screen(point_world: Sequence[float], camera: Camera, basis: Optiona
     return int(x), int(y)
 
 
+def project_segment(
+    start_world: Sequence[float],
+    end_world: Sequence[float],
+    camera: Camera,
+    basis: Optional[CameraBasis] = None,
+) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+    camera_pos, right, up, forward = basis if basis is not None else camera_basis(camera)
+
+    def to_view(point_world: Sequence[float]) -> List[float]:
+        relative_point = [
+            point_world[0] - camera_pos[0],
+            point_world[1] - camera_pos[1],
+            point_world[2] - camera_pos[2],
+        ]
+        return [
+            vec_dot(relative_point, right),
+            vec_dot(relative_point, up),
+            vec_dot(relative_point, forward),
+        ]
+
+    start_view = to_view(start_world)
+    end_view = to_view(end_world)
+    start_z = start_view[2]
+    end_z = end_view[2]
+
+    if start_z <= CAMERA_NEAR_PLANE and end_z <= CAMERA_NEAR_PLANE:
+        return None
+
+    if start_z <= CAMERA_NEAR_PLANE or end_z <= CAMERA_NEAR_PLANE:
+        dz = end_z - start_z
+        if abs(dz) < 1e-8:
+            return None
+        t = (CAMERA_NEAR_PLANE - start_z) / dz
+        clipped_point = [
+            start_view[0] + (end_view[0] - start_view[0]) * t,
+            start_view[1] + (end_view[1] - start_view[1]) * t,
+            CAMERA_NEAR_PLANE,
+        ]
+        if start_z <= CAMERA_NEAR_PLANE:
+            start_view = clipped_point
+        else:
+            end_view = clipped_point
+
+    def view_to_screen(point_view: Sequence[float]) -> Optional[Tuple[int, int]]:
+        if not all(math.isfinite(v) for v in point_view):
+            return None
+        x = point_view[0] * CAMERA_FOCAL_LENGTH / point_view[2] + WINDOW_SIZE[0] / 2
+        y = -point_view[1] * CAMERA_FOCAL_LENGTH / point_view[2] + WINDOW_SIZE[1] / 2
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return None
+        if abs(x) > CAMERA_SCREEN_LIMIT or abs(y) > CAMERA_SCREEN_LIMIT:
+            return None
+        return int(x), int(y)
+
+    start_px = view_to_screen(start_view)
+    end_px = view_to_screen(end_view)
+    if start_px is None or end_px is None:
+        return None
+    return start_px, end_px
+
+
 def to_world(local_point: Tuple[float, float, float], sim: ROVSimulator) -> List[float]:
     rotated = sim.rotate_body_to_world(local_point)
     return vec_add(rotated, sim.pos)
@@ -670,16 +731,26 @@ def draw_pool_floor(screen: pygame.Surface, camera: Camera):
 
     for index in range(-half_extent, half_extent + 1):
         x = (origin_x + index) * grid_spacing
-        start = world_to_screen((x, FLOOR_Y, (origin_z - half_extent) * grid_spacing), camera, basis)
-        end = world_to_screen((x, FLOOR_Y, (origin_z + half_extent) * grid_spacing), camera, basis)
-        if start is not None and end is not None:
+        projected = project_segment(
+            (x, FLOOR_Y, (origin_z - half_extent) * grid_spacing),
+            (x, FLOOR_Y, (origin_z + half_extent) * grid_spacing),
+            camera,
+            basis,
+        )
+        if projected is not None:
+            start, end = projected
             pygame.draw.line(screen, axis_color if index == 0 else line_color, start, end, 2 if index == 0 else 1)
 
     for index in range(-half_extent, half_extent + 1):
         z = (origin_z + index) * grid_spacing
-        start = world_to_screen(((origin_x - half_extent) * grid_spacing, FLOOR_Y, z), camera, basis)
-        end = world_to_screen(((origin_x + half_extent) * grid_spacing, FLOOR_Y, z), camera, basis)
-        if start is not None and end is not None:
+        projected = project_segment(
+            ((origin_x - half_extent) * grid_spacing, FLOOR_Y, z),
+            ((origin_x + half_extent) * grid_spacing, FLOOR_Y, z),
+            camera,
+            basis,
+        )
+        if projected is not None:
+            start, end = projected
             pygame.draw.line(screen, axis_color if index == 0 else line_color, start, end, 2 if index == 0 else 1)
 
 
