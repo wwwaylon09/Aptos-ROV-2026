@@ -124,16 +124,19 @@ def quat_conjugate(q: Sequence[float]) -> List[float]:
 def quat_to_euler(q: Sequence[float]) -> List[float]:
     qw, qx, qy, qz = q
 
-    sinp = 2.0 * (qw * qx - qy * qz)
-    pitch = math.asin(clamp(sinp, -1.0, 1.0))
+    # Simulator convention:
+    #   pitch -> rotation about +Z (forward)
+    #   roll  -> rotation about +X (right)
+    sinr = 2.0 * (qw * qx - qy * qz)
+    roll = math.asin(clamp(sinr, -1.0, 1.0))
 
     siny_cosp = 2.0 * (qw * qy + qx * qz)
     cosy_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
     yaw = math.atan2(siny_cosp, cosy_cosp)
 
-    sinr_cosp = 2.0 * (qw * qz + qx * qy)
-    cosr_cosp = 1.0 - 2.0 * (qx * qx + qz * qz)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
+    sinp_cosp = 2.0 * (qw * qz + qx * qy)
+    cosp_cosp = 1.0 - 2.0 * (qx * qx + qz * qz)
+    pitch = math.atan2(sinp_cosp, cosp_cosp)
 
     return [pitch, yaw, roll]
 
@@ -482,14 +485,13 @@ def rotate_point(point: Tuple[float, float, float], rotation: Tuple[float, float
     x, y, z = point
     pitch, yaw, roll = rotation
 
-    # Apply intrinsic body rotations as roll -> pitch -> yaw.
-    # This yields body-to-world transform R = R_y(yaw) * R_x(pitch) * R_z(roll),
-    # so pitch remains relative to the current yawed heading.
+    # Apply simulator-axis rotations as roll(X) -> pitch(Z) -> yaw(Y).
+    # This keeps camera pitch aligned with the simulator's pitch convention.
     cr, sr = math.cos(roll), math.sin(roll)
-    x, y = x * cr - y * sr, x * sr + y * cr
+    y, z = y * cr - z * sr, y * sr + z * cr
 
     cp, sp = math.cos(pitch), math.sin(pitch)
-    y, z = y * cp - z * sp, y * sp + z * cp
+    x, y = x * cp - y * sp, x * sp + y * cp
 
     cy, sy = math.cos(yaw), math.sin(yaw)
     x, z = x * cy + z * sy, -x * sy + z * cy
