@@ -161,14 +161,19 @@ def calculate_orientation_from_sim(sim: "ROVSimulator") -> Tuple[float, float]:
     # World-up expressed in body frame.
     body_x, body_y, body_z = quat_rotate((0.0, 1.0, 0.0), quat_conjugate(sim.orientation))
 
-    # ROV geometry in this sim:
-    # - Front motors are M1..M4 (negative X side), back motors are M5..M8.
-    # - So longitudinal/roll axis is X, vertical axis is Y, lateral/pitch axis is Z.
+    # Map simulator body axes onto the same accel-axis convention used by
+    # bottom-side.py's MPU formulas:
+    #   pitch = atan2(accel_x, sqrt(accel_y^2 + accel_z^2))
+    #   roll  = atan2(-accel_y, accel_z)
     #
-    # Report pitch and roll with accelerometer-style bounded angles so yaw remains
-    # decoupled and roll does not jump to 180° when crossing ±90°.
-    pitch = math.atan2(body_x, math.sqrt(body_y**2 + body_z**2))
-    roll = math.atan2(-body_z, math.sqrt(body_x**2 + body_y**2))
+    # For this simulator, front/back is along X (M1..M4 front, M5..M8 back), so
+    # roll is rotation about X and pitch is rotation about Z.
+    accel_x = body_x
+    accel_y = body_z
+    accel_z = body_y
+
+    pitch = math.atan2(accel_x, math.sqrt(accel_y**2 + accel_z**2))
+    roll = math.atan2(-accel_y, accel_z)
     return pitch, roll
 
 
