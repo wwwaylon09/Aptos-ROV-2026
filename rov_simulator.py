@@ -17,7 +17,7 @@ CAMERA_FOLLOW_SMOOTHING = 6.0
 CAMERA_FOCAL_LENGTH = 520.0
 CAMERA_NEAR_PLANE = 0.25
 CAMERA_SCREEN_LIMIT = 1_000_000
-FLOOR_Y = -3.0
+FLOOR_Y = -5.0
 
 PS3_LAYOUT = {
     "claw_angle_increase": 13,
@@ -376,10 +376,10 @@ class InputModel:
         else:
             self.stabilization_debounce = True
 
-        yaw = self.joystick.get_axis(0)
-        forward_backward = -self.joystick.get_axis(3)
-        left_right = self.joystick.get_axis(2)
-        up_down = self.joystick.get_axis(1)
+        yaw = self.joystick.get_axis(2)
+        forward_backward = -self.joystick.get_axis(1)
+        left_right = self.joystick.get_axis(0)
+        up_down = self.joystick.get_axis(3)
 
         forward_backward = 0 if abs(forward_backward) < DEADBAND else forward_backward
         left_right = 0 if abs(left_right) < DEADBAND else left_right
@@ -491,9 +491,9 @@ class Camera:
         self.reset()
 
     def reset(self):
-        self.yaw = math.pi/2
+        self.yaw = math.pi
         self.pitch = -0.35
-        self.distance = 8.5
+        self.distance = 5.5
         self.target = [0.0, 0.0, 0.0]
 
     def update(self, keys: pygame.key.ScancodeWrapper, dt: float, target: Sequence[float]):
