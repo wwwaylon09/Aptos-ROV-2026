@@ -77,6 +77,62 @@ def vec_normalize(v: Sequence[float]) -> List[float]:
     return [v[0] / magnitude, v[1] / magnitude, v[2] / magnitude]
 
 
+def quat_multiply(a: Sequence[float], b: Sequence[float]) -> List[float]:
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return [
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    ]
+
+
+def quat_normalize(q: Sequence[float]) -> List[float]:
+    magnitude = math.sqrt(sum(component * component for component in q))
+    if magnitude < 1e-8:
+        return [1.0, 0.0, 0.0, 0.0]
+    return [component / magnitude for component in q]
+
+
+def quat_from_axis_angle(axis: Sequence[float], angle: float) -> List[float]:
+    half = angle * 0.5
+    s = math.sin(half)
+    return [math.cos(half), axis[0] * s, axis[1] * s, axis[2] * s]
+
+
+def quat_rotate(point: Sequence[float], q: Sequence[float]) -> List[float]:
+    qw, qx, qy, qz = q
+    px, py, pz = point
+
+    ix = qw * px + qy * pz - qz * py
+    iy = qw * py + qz * px - qx * pz
+    iz = qw * pz + qx * py - qy * px
+    iw = -qx * px - qy * py - qz * pz
+
+    x = ix * qw + iw * -qx + iy * -qz - iz * -qy
+    y = iy * qw + iw * -qy + iz * -qx - ix * -qz
+    z = iz * qw + iw * -qz + ix * -qy - iy * -qx
+    return [x, y, z]
+
+
+def quat_to_euler(q: Sequence[float]) -> List[float]:
+    qw, qx, qy, qz = q
+
+    sinp = 2.0 * (qw * qx - qy * qz)
+    pitch = math.asin(clamp(sinp, -1.0, 1.0))
+
+    siny_cosp = 2.0 * (qw * qy + qx * qz)
+    cosy_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+
+    sinr_cosp = 2.0 * (qw * qz + qx * qy)
+    cosr_cosp = 1.0 - 2.0 * (qx * qx + qz * qz)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    return [pitch, yaw, roll]
+
+
 ControlMapping = Dict[str, Union[int, str]]
 
 
@@ -277,10 +333,14 @@ class ROVSimulator:
     def reset(self):
         self.pos = [0.0, 0.0, 0.0]
         self.vel = [0.0, 0.0, 0.0]
-        self.rot = [0.0, 0.0, 0.0]  # pitch, yaw, roll
-        self.rot_vel = [0.0, 0.0, 0.0]
+        self.rot = [0.0, 0.0, 0.0]  # pitch, yaw, roll (debug view derived from quaternion)
+        self.rot_vel = [0.0, 0.0, 0.0]  # body-frame angular velocity (x, y, z)
+        self.orientation = [1.0, 0.0, 0.0, 0.0]  # quaternion body->world
         self.net_body_force = [0.0, 0.0, 0.0]
         self.net_body_torque = [0.0, 0.0, 0.0]
+
+    def rotate_body_to_world(self, vector: Sequence[float]) -> List[float]:
+        return quat_rotate(vector, self.orientation)
 
     def update(self, thruster_input: List[float], dt: float):
         body_force = [0.0, 0.0, 0.0]
@@ -298,7 +358,7 @@ class ROVSimulator:
         self.net_body_force = body_force
         self.net_body_torque = body_torque
 
-        world_force = rotate_point(tuple(body_force), tuple(self.rot))
+        world_force = self.rotate_body_to_world(body_force)
         for axis in range(3):
             self.vel[axis] += world_force[axis] * dt
             speed = abs(self.vel[axis])
@@ -311,7 +371,14 @@ class ROVSimulator:
             angular_speed = abs(self.rot_vel[axis])
             total_angular_drag = self.angular_drag + self.angular_quad_drag * angular_speed
             self.rot_vel[axis] *= max(0.0, 1.0 - total_angular_drag * dt)
-            self.rot[axis] += self.rot_vel[axis] * dt
+
+        omega_magnitude = math.sqrt(sum(component * component for component in self.rot_vel))
+        if omega_magnitude > 1e-8:
+            axis = [component / omega_magnitude for component in self.rot_vel]
+            delta_q = quat_from_axis_angle(axis, omega_magnitude * dt)
+            self.orientation = quat_normalize(quat_multiply(self.orientation, delta_q))
+
+        self.rot = quat_to_euler(self.orientation)
 
 
 class Camera:
@@ -366,7 +433,7 @@ def world_to_screen(point_world: Sequence[float], camera: Camera) -> Tuple[int, 
 
 
 def to_world(local_point: Tuple[float, float, float], sim: ROVSimulator) -> List[float]:
-    rotated = rotate_point(local_point, tuple(sim.rot))
+    rotated = sim.rotate_body_to_world(local_point)
     return vec_add(rotated, sim.pos)
 
 
@@ -399,7 +466,7 @@ def draw_rov(screen: pygame.Surface, sim: ROVSimulator, thrusters: List[float], 
         center_px = world_to_screen(center_world, camera)
 
         base_direction = vec_normalize(thruster.positive_direction)
-        direction_world = rotate_point(tuple(base_direction), tuple(sim.rot))
+        direction_world = sim.rotate_body_to_world(base_direction)
 
         color = (90, 220, 120) if thrusters[index] >= 0 else (235, 95, 95)
         intensity = int(100 + 155 * min(1.0, abs(thrusters[index])))
