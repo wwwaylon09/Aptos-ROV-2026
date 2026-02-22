@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import pygame
 
@@ -36,12 +36,12 @@ XBOX_ONE_LAYOUT = {
     "claw_angle_decrease": 0,
     "claw_rotate_increase": 3,
     "claw_rotate_decrease": 2,
-    "pitch_positive": 6,
-    "pitch_negative": 4,
+    "pitch_positive": "dpad_up",
+    "pitch_negative": "dpad_down",
     "roll_positive": "dpad_left",
     "roll_negative": "dpad_right",
-    "syringe_open": "dpad_up",
-    "syringe_close": "dpad_down",
+    "syringe_open": 6,
+    "syringe_close": 4,
     "claw_angle_preset_high": 5,
     "claw_angle_preset_low": 7,
     "camera_zero": 9,
@@ -77,7 +77,66 @@ def vec_normalize(v: Sequence[float]) -> List[float]:
     return [v[0] / magnitude, v[1] / magnitude, v[2] / magnitude]
 
 
-def get_controller_layout(joystick_name: str) -> Dict[str, int]:
+def quat_multiply(a: Sequence[float], b: Sequence[float]) -> List[float]:
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return [
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    ]
+
+
+def quat_normalize(q: Sequence[float]) -> List[float]:
+    magnitude = math.sqrt(sum(component * component for component in q))
+    if magnitude < 1e-8:
+        return [1.0, 0.0, 0.0, 0.0]
+    return [component / magnitude for component in q]
+
+
+def quat_from_axis_angle(axis: Sequence[float], angle: float) -> List[float]:
+    half = angle * 0.5
+    s = math.sin(half)
+    return [math.cos(half), axis[0] * s, axis[1] * s, axis[2] * s]
+
+
+def quat_rotate(point: Sequence[float], q: Sequence[float]) -> List[float]:
+    qw, qx, qy, qz = q
+    px, py, pz = point
+
+    ix = qw * px + qy * pz - qz * py
+    iy = qw * py + qz * px - qx * pz
+    iz = qw * pz + qx * py - qy * px
+    iw = -qx * px - qy * py - qz * pz
+
+    x = ix * qw + iw * -qx + iy * -qz - iz * -qy
+    y = iy * qw + iw * -qy + iz * -qx - ix * -qz
+    z = iz * qw + iw * -qz + ix * -qy - iy * -qx
+    return [x, y, z]
+
+
+def quat_to_euler(q: Sequence[float]) -> List[float]:
+    qw, qx, qy, qz = q
+
+    sinp = 2.0 * (qw * qx - qy * qz)
+    pitch = math.asin(clamp(sinp, -1.0, 1.0))
+
+    siny_cosp = 2.0 * (qw * qy + qx * qz)
+    cosy_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+
+    sinr_cosp = 2.0 * (qw * qz + qx * qy)
+    cosr_cosp = 1.0 - 2.0 * (qx * qx + qz * qz)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    return [pitch, yaw, roll]
+
+
+ControlMapping = Dict[str, Union[int, str]]
+
+
+def get_controller_layout(joystick_name: str) -> ControlMapping:
     if "xbox" in joystick_name.lower():
         print("Using Xbox One button mapping")
         return XBOX_ONE_LAYOUT
@@ -108,7 +167,7 @@ THRUSTERS = [
 
 class InputModel:
     def __init__(self):
-        self.controller_layout = PS3_LAYOUT
+        self.controller_layout: ControlMapping = PS3_LAYOUT
         self.joystick: Optional[pygame.joystick.Joystick] = None
         self.stabilization_debounce = True
 
@@ -149,52 +208,79 @@ class InputModel:
         pitch = 0
         roll = 0
         stabilization_pressed = False
+        dpad_x = 0
+        dpad_y = 0
+
+        if self.joystick.get_numhats() > 0:
+            dpad_x, dpad_y = self.joystick.get_hat(0)
+
+        def control_active(control_name: str, button: Optional[int] = None) -> bool:
+            mapping = self.controller_layout[control_name]
+            if isinstance(mapping, int):
+                return button == mapping if button is not None else False
+            if mapping == "dpad_left":
+                return dpad_x == -1
+            if mapping == "dpad_right":
+                return dpad_x == 1
+            if mapping == "dpad_up":
+                return dpad_y == 1
+            if mapping == "dpad_down":
+                return dpad_y == -1
+            return False
 
         for button in range(self.joystick.get_numbuttons()):
             pressed = self.joystick.get_button(button)
             if not pressed:
                 continue
-            if button == self.controller_layout["claw_angle_increase"] and self.claw_angle <= 179:
+            if control_active("claw_angle_increase", button) and self.claw_angle <= 179:
                 self.claw_angle += 1
-            elif button == self.controller_layout["claw_angle_decrease"] and self.claw_angle >= 1:
+            elif control_active("claw_angle_decrease", button) and self.claw_angle >= 1:
                 self.claw_angle -= 1
-            if button == self.controller_layout["claw_rotate_increase"] and self.claw_rotate <= 179:
+            if control_active("claw_rotate_increase", button) and self.claw_rotate <= 179:
                 self.claw_rotate += 1
-            elif button == self.controller_layout["claw_rotate_decrease"] and self.claw_rotate >= 1:
+            elif control_active("claw_rotate_decrease", button) and self.claw_rotate >= 1:
                 self.claw_rotate -= 1
-            if button == self.controller_layout["pitch_positive"]:
+            if control_active("pitch_positive", button):
                 pitch = 1
-            elif button == self.controller_layout["pitch_negative"]:
+            elif control_active("pitch_negative", button):
                 pitch = -1
-            if button == self.controller_layout["roll_positive"]:
+            if control_active("roll_positive", button):
                 roll = 1
-            elif button == self.controller_layout["roll_negative"]:
+            elif control_active("roll_negative", button):
                 roll = -1
-            if button == self.controller_layout["claw_angle_preset_low"]:
+            if control_active("claw_angle_preset_low", button):
                 self.claw_angle = 65
-            if button == self.controller_layout["claw_angle_preset_high"]:
+            if control_active("claw_angle_preset_high", button):
                 self.claw_angle = 100
-            if button == self.controller_layout["syringe_open"]:
+            if control_active("syringe_open", button):
                 self.syringe_angle = 180
-            if button == self.controller_layout["syringe_close"]:
+            if control_active("syringe_close", button):
                 self.syringe_angle = 0
-            if button == self.controller_layout["camera_zero"]:
+            if control_active("camera_zero", button):
                 self.camera_angle = 0
-            if button == self.controller_layout["camera_max"]:
+            if control_active("camera_max", button):
                 self.camera_angle = 180
-            if button == self.controller_layout["stabilization_toggle"]:
+            if control_active("stabilization_toggle", button):
                 stabilization_pressed = True
 
-        if self.joystick.get_numhats() > 0:
-            dpad_x, dpad_y = self.joystick.get_hat(0)
-            if self.controller_layout["claw_angle_preset_low"] == "dpad_right" and dpad_x == 1:
-                self.claw_angle = 65
-            if self.controller_layout["claw_angle_preset_high"] == "dpad_left" and dpad_x == -1:
-                self.claw_angle = 100
-            if self.controller_layout["syringe_open"] == "dpad_up" and dpad_y == 1:
-                self.syringe_angle = 180
-            if self.controller_layout["syringe_close"] == "dpad_down" and dpad_y == -1:
-                self.syringe_angle = 0
+        if control_active("pitch_positive"):
+            pitch = 1
+        elif control_active("pitch_negative"):
+            pitch = -1
+
+        if control_active("roll_positive"):
+            roll = 1
+        elif control_active("roll_negative"):
+            roll = -1
+
+        if control_active("claw_angle_preset_low"):
+            self.claw_angle = 65
+        if control_active("claw_angle_preset_high"):
+            self.claw_angle = 100
+        if control_active("syringe_open"):
+            self.syringe_angle = 180
+        if control_active("syringe_close"):
+            self.syringe_angle = 0
 
         if stabilization_pressed:
             if self.stabilization_debounce:
@@ -247,10 +333,14 @@ class ROVSimulator:
     def reset(self):
         self.pos = [0.0, 0.0, 0.0]
         self.vel = [0.0, 0.0, 0.0]
-        self.rot = [0.0, 0.0, 0.0]  # pitch, yaw, roll
-        self.rot_vel = [0.0, 0.0, 0.0]
+        self.rot = [0.0, 0.0, 0.0]  # pitch, yaw, roll (debug view derived from quaternion)
+        self.rot_vel = [0.0, 0.0, 0.0]  # body-frame angular velocity (x, y, z)
+        self.orientation = [1.0, 0.0, 0.0, 0.0]  # quaternion body->world
         self.net_body_force = [0.0, 0.0, 0.0]
         self.net_body_torque = [0.0, 0.0, 0.0]
+
+    def rotate_body_to_world(self, vector: Sequence[float]) -> List[float]:
+        return quat_rotate(vector, self.orientation)
 
     def update(self, thruster_input: List[float], dt: float):
         body_force = [0.0, 0.0, 0.0]
@@ -268,7 +358,7 @@ class ROVSimulator:
         self.net_body_force = body_force
         self.net_body_torque = body_torque
 
-        world_force = rotate_point(tuple(body_force), tuple(self.rot))
+        world_force = self.rotate_body_to_world(body_force)
         for axis in range(3):
             self.vel[axis] += world_force[axis] * dt
             speed = abs(self.vel[axis])
@@ -281,7 +371,14 @@ class ROVSimulator:
             angular_speed = abs(self.rot_vel[axis])
             total_angular_drag = self.angular_drag + self.angular_quad_drag * angular_speed
             self.rot_vel[axis] *= max(0.0, 1.0 - total_angular_drag * dt)
-            self.rot[axis] += self.rot_vel[axis] * dt
+
+        omega_magnitude = math.sqrt(sum(component * component for component in self.rot_vel))
+        if omega_magnitude > 1e-8:
+            axis = [component / omega_magnitude for component in self.rot_vel]
+            delta_q = quat_from_axis_angle(axis, omega_magnitude * dt)
+            self.orientation = quat_normalize(quat_multiply(self.orientation, delta_q))
+
+        self.rot = quat_to_euler(self.orientation)
 
 
 class Camera:
@@ -313,14 +410,17 @@ def rotate_point(point: Tuple[float, float, float], rotation: Tuple[float, float
     x, y, z = point
     pitch, yaw, roll = rotation
 
+    # Apply intrinsic body rotations as roll -> pitch -> yaw.
+    # This yields body-to-world transform R = R_y(yaw) * R_x(pitch) * R_z(roll),
+    # so pitch remains relative to the current yawed heading.
+    cr, sr = math.cos(roll), math.sin(roll)
+    x, y = x * cr - y * sr, x * sr + y * cr
+
     cp, sp = math.cos(pitch), math.sin(pitch)
     y, z = y * cp - z * sp, y * sp + z * cp
 
     cy, sy = math.cos(yaw), math.sin(yaw)
     x, z = x * cy + z * sy, -x * sy + z * cy
-
-    cr, sr = math.cos(roll), math.sin(roll)
-    x, y = x * cr - y * sr, x * sr + y * cr
     return [x, y, z]
 
 
@@ -333,7 +433,7 @@ def world_to_screen(point_world: Sequence[float], camera: Camera) -> Tuple[int, 
 
 
 def to_world(local_point: Tuple[float, float, float], sim: ROVSimulator) -> List[float]:
-    rotated = rotate_point(local_point, tuple(sim.rot))
+    rotated = sim.rotate_body_to_world(local_point)
     return vec_add(rotated, sim.pos)
 
 
@@ -366,7 +466,7 @@ def draw_rov(screen: pygame.Surface, sim: ROVSimulator, thrusters: List[float], 
         center_px = world_to_screen(center_world, camera)
 
         base_direction = vec_normalize(thruster.positive_direction)
-        direction_world = rotate_point(tuple(base_direction), tuple(sim.rot))
+        direction_world = sim.rotate_body_to_world(base_direction)
 
         color = (90, 220, 120) if thrusters[index] >= 0 else (235, 95, 95)
         intensity = int(100 + 155 * min(1.0, abs(thrusters[index])))
