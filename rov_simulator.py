@@ -158,21 +158,19 @@ def merge_inputs(joystick_input: float, mpu_input: float) -> float:
 
 
 def calculate_orientation_from_sim(sim: "ROVSimulator") -> Tuple[float, float]:
-    # Derive a simulated MPU-6050 accelerometer vector from simulator orientation.
-    # Simulator body axes are +X right, +Y up, +Z forward with yaw around +Y.
-    # Use world-up in body frame, then remap to MPU-style axes expected by
-    # bottom-side.py formulas so yaw does not appear as pitch.
-    body_right, body_up, body_forward = quat_rotate((0.0, 1.0, 0.0), quat_conjugate(sim.orientation))
+    # World-up expressed in body frame.
+    body_x, body_y, body_z = quat_rotate((0.0, 1.0, 0.0), quat_conjugate(sim.orientation))
 
-    # Align simulator body axes (+X right, +Y up, +Z forward) with the MPU axis
-    # convention used in bottom-side.py's pitch/roll equations.
+    # Map simulator body axes onto the same accel-axis convention used by
+    # bottom-side.py's MPU formulas:
+    #   pitch = atan2(accel_x, sqrt(accel_y^2 + accel_z^2))
+    #   roll  = atan2(-accel_y, accel_z)
     #
-    # Map the simulated body frame onto the same MPU axis convention used by
-    # bottom-side.py so pitch reflects forward tilt and roll reflects right tilt,
-    # while heading (yaw about +Y) stays decoupled from both readings.
-    accel_x = -body_forward
-    accel_y = -body_right
-    accel_z = body_up
+    # For this simulator, front/back is along X (M1..M4 front, M5..M8 back), so
+    # roll is rotation about X and pitch is rotation about Z.
+    accel_x = body_x
+    accel_y = body_z
+    accel_z = body_y
 
     pitch = math.atan2(accel_x, math.sqrt(accel_y**2 + accel_z**2))
     roll = math.atan2(-accel_y, accel_z)
