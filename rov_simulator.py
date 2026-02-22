@@ -30,10 +30,6 @@ PS3_LAYOUT = {
     "roll_negative": 7,
     "claw_angle_preset_low": None,
     "claw_angle_preset_high": None,
-    "syringe_open": None,
-    "syringe_close": None,
-    "camera_zero": None,
-    "camera_max": None,
     "stabilization_toggle": 3,
 }
 
@@ -46,12 +42,8 @@ XBOX_ONE_LAYOUT = {
     "pitch_negative": "dpad_down",
     "roll_positive": "dpad_right",
     "roll_negative": "dpad_left",
-    "syringe_open": None,
-    "syringe_close": None,
     "claw_angle_preset_high": None,
     "claw_angle_preset_low": None,
-    "camera_zero": None,
-    "camera_max": None,
     "stabilization_toggle": 7,
 }
 
@@ -198,7 +190,7 @@ def calculate_orientation_from_sim(sim: "ROVSimulator") -> Tuple[float, float]:
 def apply_stabilization(control_input: List[float], sim: "ROVSimulator") -> Tuple[float, float]:
     pitch_rad, roll_rad = calculate_orientation_from_sim(sim)
 
-    if control_input[12]:
+    if control_input[10]:
         pitch = pitch_rad / math.pi
         roll = roll_rad / math.pi
 
@@ -260,15 +252,12 @@ class InputModel:
 
         self.claw_angle = 50
         self.claw_rotate = 90
-        self.syringe_angle = 90
-        self.camera_angle = 90
         self.enable_stabilization = False
 
-        self.control_input = [0.0] * 13
+        self.control_input = [0.0] * 11
         self.control_input[8] = self.claw_angle
         self.control_input[9] = self.claw_rotate
-        self.control_input[10] = self.syringe_angle
-        self.control_input[11] = self.camera_angle
+        self.control_input[10] = 0
 
     def maybe_connect_controller(self):
         if pygame.joystick.get_count() > 0 and self.joystick is None:
@@ -339,14 +328,6 @@ class InputModel:
                 self.claw_angle = 65
             if control_active("claw_angle_preset_high", button):
                 self.claw_angle = 100
-            if control_active("syringe_open", button):
-                self.syringe_angle = 180
-            if control_active("syringe_close", button):
-                self.syringe_angle = 0
-            if control_active("camera_zero", button):
-                self.camera_angle = 0
-            if control_active("camera_max", button):
-                self.camera_angle = 180
             if control_active("stabilization_toggle", button):
                 stabilization_pressed = True
 
@@ -364,10 +345,6 @@ class InputModel:
             self.claw_angle = 65
         if control_active("claw_angle_preset_high"):
             self.claw_angle = 100
-        if control_active("syringe_open"):
-            self.syringe_angle = 180
-        if control_active("syringe_close"):
-            self.syringe_angle = 0
 
         if stabilization_pressed:
             if self.stabilization_debounce:
@@ -398,9 +375,7 @@ class InputModel:
 
         c[8] = self.claw_angle
         c[9] = self.claw_rotate
-        c[10] = self.syringe_angle
-        c[11] = self.camera_angle
-        c[12] = self.enable_stabilization
+        c[10] = self.enable_stabilization
         return c
 
 
@@ -785,9 +760,7 @@ def draw_hud(
     telemetry = [
         f"Claw Angle: {control_input[8]:>5.1f}",
         f"Claw Rotate: {control_input[9]:>5.1f}",
-        f"Syringe: {control_input[10]:>5.1f}",
-        f"Camera Servo: {control_input[11]:>5.1f}",
-        f"Stabilization: {'ON' if control_input[12] else 'OFF'}",
+        f"Stabilization: {'ON' if control_input[10] else 'OFF'}",
         f"MPU Pitch: {mpu_pitch_deg:>6.2f}",
         f"MPU Roll:  {mpu_roll_deg:>6.2f}",
     ]

@@ -91,8 +91,6 @@ HUD_STATE = {
     "thrusters": [0.0] * 8,
     "claw_angle": 0.0,
     "claw_rotation": 0.0,
-    "syringe_angle": 0.0,
-    "camera_angle": 0.0,
     "stabilization_enabled": False,
     "mpu_pitch_deg": 0.0,
     "mpu_roll_deg": 0.0,
@@ -168,9 +166,7 @@ def update_hud_state(inputs, pitch_deg, roll_deg):
         HUD_STATE["thrusters"] = [float(value) for value in inputs[:8]]
         HUD_STATE["claw_angle"] = float(inputs[8])
         HUD_STATE["claw_rotation"] = float(inputs[9])
-        HUD_STATE["syringe_angle"] = float(inputs[10])
-        HUD_STATE["camera_angle"] = float(inputs[11])
-        HUD_STATE["stabilization_enabled"] = bool(inputs[12])
+        HUD_STATE["stabilization_enabled"] = bool(inputs[10])
         HUD_STATE["mpu_pitch_deg"] = float(pitch_deg)
         HUD_STATE["mpu_roll_deg"] = float(roll_deg)
 
@@ -181,8 +177,6 @@ def get_hud_state():
             "thrusters": [round(value, 3) for value in HUD_STATE["thrusters"]],
             "claw_angle": round(HUD_STATE["claw_angle"], 3),
             "claw_rotation": round(HUD_STATE["claw_rotation"], 3),
-            "syringe_angle": round(HUD_STATE["syringe_angle"], 3),
-            "camera_angle": round(HUD_STATE["camera_angle"], 3),
             "stabilization_enabled": HUD_STATE["stabilization_enabled"],
             "mpu_pitch_deg": round(HUD_STATE["mpu_pitch_deg"], 2),
             "mpu_roll_deg": round(HUD_STATE["mpu_roll_deg"], 2),
@@ -228,8 +222,8 @@ def receive_frame(connection):
         return None
 
     decoded = json.loads(payload.decode("utf-8"))
-    if not isinstance(decoded, list) or len(decoded) != 13:
-        raise ValueError("Expected control payload as list[13]")
+    if not isinstance(decoded, list) or len(decoded) != 11:
+        raise ValueError("Expected control payload as list[11]")
 
     return decoded
 
@@ -287,7 +281,7 @@ def run_control_server(stop_event):
                         print(f"MPU read failed: {exc}")
                         pitch_deg, roll_deg, pitch_rad, roll_rad = 0.0, 0.0, 0.0, 0.0
 
-                    if inputs[12]:
+                    if inputs[10]:
                         pitch = pitch_rad / math.pi
                         roll = roll_rad / math.pi
 
@@ -529,8 +523,6 @@ def index():
             stabilizationEl.classList.toggle("state-disabled", !stabilizationEnabled);
             document.getElementById("hud-claw-angle").textContent = formatInput(hud.claw_angle) + "°";
             document.getElementById("hud-claw-rotation").textContent = formatInput(hud.claw_rotation) + "°";
-            document.getElementById("hud-syringe-angle").textContent = formatInput(hud.syringe_angle) + "°";
-            document.getElementById("hud-camera-angle").textContent = formatInput(hud.camera_angle) + "°";
             document.getElementById("hud-mpu-pitch").textContent = formatInput(hud.mpu_pitch_deg) + "°";
             document.getElementById("hud-mpu-roll").textContent = formatInput(hud.mpu_roll_deg) + "°";
 
@@ -578,8 +570,6 @@ def index():
                     <div class="hud-row"><span class="hud-label">Stabilization</span><span class="hud-value" id="hud-stabilization">Disabled</span></div>
                     <div class="hud-row"><span class="hud-label">Claw angle</span><span class="hud-value" id="hud-claw-angle">0.00°</span></div>
                     <div class="hud-row"><span class="hud-label">Claw rotation</span><span class="hud-value" id="hud-claw-rotation">0.00°</span></div>
-                    <div class="hud-row"><span class="hud-label">Syringe angle</span><span class="hud-value" id="hud-syringe-angle">0.00°</span></div>
-                    <div class="hud-row"><span class="hud-label">Camera angle</span><span class="hud-value" id="hud-camera-angle">0.00°</span></div>
                     <div class="hud-row"><span class="hud-label">MPU pitch</span><span class="hud-value" id="hud-mpu-pitch">0.00°</span></div>
                     <div class="hud-row"><span class="hud-label">MPU roll</span><span class="hud-value" id="hud-mpu-roll">0.00°</span></div>
                     <div>
