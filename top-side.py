@@ -14,40 +14,40 @@ SOCKET_TIMEOUT_SECONDS = 2.0
 
 
 PS3_LAYOUT = {
-    "claw_angle_increase": 9,
-    "claw_angle_decrease": 8,
-    "claw_rotate_increase": 11,
-    "claw_rotate_decrease": 10,
+    "claw_angle_increase": 13,
+    "claw_angle_decrease": 14,
+    "claw_rotate_increase": 12,
+    "claw_rotate_decrease": 15,
     "pitch_positive": 4,
     "pitch_negative": 6,
     "roll_positive": 5,
     "roll_negative": 7,
-    "claw_angle_preset_low": 14,
-    "claw_angle_preset_high": 13,
-    "syringe_open": 12,
-    "syringe_close": 15,
-    "camera_zero": 1,
-    "camera_max": 2,
+    "claw_angle_preset_low": None,
+    "claw_angle_preset_high": None,
+    "syringe_open": None,
+    "syringe_close": None,
+    "camera_zero": None,
+    "camera_max": None,
     "stabilization_toggle": 3,
 }
 
 # Xbox One maps D-pad to the first hat on most drivers instead of button indices.
 XBOX_ONE_LAYOUT = {
-    "claw_angle_increase": 1,  # B
-    "claw_angle_decrease": 0,  # A
-    "claw_rotate_increase": 3,  # Y
-    "claw_rotate_decrease": 2,  # X
-    "pitch_positive": 4,  # LB
-    "pitch_negative": 6,  # View/Back
-    "roll_positive": 5,  # RB
-    "roll_negative": 7,  # Menu/Start
-    "syringe_open": "dpad_up",
-    "syringe_close": "dpad_down",
-    "claw_angle_preset_high": "dpad_left",
-    "claw_angle_preset_low": "dpad_right",
-    "camera_zero": 9,  # Left stick press
-    "camera_max": 10,  # Right stick press
-    "stabilization_toggle": 8,  # Xbox/Guide
+    "claw_angle_increase": 1,
+    "claw_angle_decrease": 0,
+    "claw_rotate_increase": 3,
+    "claw_rotate_decrease": 2,
+    "pitch_positive": "dpad_up",
+    "pitch_negative": "dpad_down",
+    "roll_positive": "dpad_right",
+    "roll_negative": "dpad_left",
+    "syringe_open": None,
+    "syringe_close": None,
+    "claw_angle_preset_high": None,
+    "claw_angle_preset_low": None,
+    "camera_zero": None,
+    "camera_max": None,
+    "stabilization_toggle": 7,
 }
 
 
@@ -139,39 +139,59 @@ try:
             # Need this value outside of the loop to prevent it from being falsely set by other buttons
             stabilization_pressed = False
 
+            dpad_x = 0
+            dpad_y = 0
+
+            if joystick.get_numhats() > 0:
+                dpad_x, dpad_y = joystick.get_hat(0)
+
+            def control_active(control_name: str, button: Optional[int] = None) -> bool:
+                mapping = controller_layout[control_name]
+                if isinstance(mapping, int):
+                    return button == mapping if button is not None else False
+                if mapping == "dpad_left":
+                    return dpad_x == -1
+                if mapping == "dpad_right":
+                    return dpad_x == 1
+                if mapping == "dpad_up":
+                    return dpad_y == 1
+                if mapping == "dpad_down":
+                    return dpad_y == -1
+                return False
+
             # Check joystick buttons
             for button in range(joystick.get_numbuttons()):
                 pressed = joystick.get_button(button)
                 if pressed:
-                    if button == controller_layout["claw_angle_increase"] and claw_angle <= 179:
+                    if control_active("claw_angle_increase", button) and claw_angle <= 179:
                         claw_angle += 1
-                    elif button == controller_layout["claw_angle_decrease"] and claw_angle >= 1:
+                    elif control_active("claw_angle_decrease", button) and claw_angle >= 1:
                         claw_angle -= 1
-                    if button == controller_layout["claw_rotate_increase"] and claw_rotate <= 179:
+                    if control_active("claw_rotate_increase", button) and claw_rotate <= 179:
                         claw_rotate += 1
-                    elif button == controller_layout["claw_rotate_decrease"] and claw_rotate >= 1:
+                    elif control_active("claw_rotate_decrease", button) and claw_rotate >= 1:
                         claw_rotate -= 1
-                    if button == controller_layout["pitch_positive"]:
+                    if control_active("pitch_positive", button):
                         pitch = 1
-                    elif button == controller_layout["pitch_negative"]:
+                    elif control_active("pitch_negative", button):
                         pitch = -1
-                    if button == controller_layout["roll_positive"]:
+                    if control_active("roll_positive", button):
                         roll = 1
-                    elif button == controller_layout["roll_negative"]:
+                    elif control_active("roll_negative", button):
                         roll = -1
-                    if button == controller_layout["claw_angle_preset_low"]:
+                    if control_active("claw_angle_preset_low", button):
                         claw_angle = 65
-                    if button == controller_layout["claw_angle_preset_high"]:
+                    if control_active("claw_angle_preset_high", button):
                         claw_angle = 100
-                    if button == controller_layout["syringe_open"]:
+                    if control_active("syringe_open", button):
                         syringe_angle = 180
-                    if button == controller_layout["syringe_close"]:
+                    if control_active("syringe_close", button):
                         syringe_angle = 0
-                    if button == controller_layout["camera_zero"]:
+                    if control_active("camera_zero", button):
                         camera_angle = 0
-                    if button == controller_layout["camera_max"]:
+                    if control_active("camera_max", button):
                         camera_angle = 180
-                    if button == controller_layout["stabilization_toggle"]:
+                    if control_active("stabilization_toggle", button):
                         stabilization_pressed = True
 
                     control_input[8] = claw_angle
@@ -180,22 +200,30 @@ try:
                     control_input[11] = camera_angle
                     control_input[12] = enable_stabilization
 
-            if joystick.get_numhats() > 0:
-                dpad_x, dpad_y = joystick.get_hat(0)
-                if controller_layout["claw_angle_preset_low"] == "dpad_right" and dpad_x == 1:
-                    claw_angle = 65
-                if controller_layout["claw_angle_preset_high"] == "dpad_left" and dpad_x == -1:
-                    claw_angle = 100
-                if controller_layout["syringe_open"] == "dpad_up" and dpad_y == 1:
-                    syringe_angle = 180
-                if controller_layout["syringe_close"] == "dpad_down" and dpad_y == -1:
-                    syringe_angle = 0
+            if control_active("pitch_positive"):
+                pitch = 1
+            elif control_active("pitch_negative"):
+                pitch = -1
 
-                control_input[8] = claw_angle
-                control_input[9] = claw_rotate
-                control_input[10] = syringe_angle
-                control_input[11] = camera_angle
-                control_input[12] = enable_stabilization
+            if control_active("roll_positive"):
+                roll = 1
+            elif control_active("roll_negative"):
+                roll = -1
+
+            if control_active("claw_angle_preset_low"):
+                claw_angle = 65
+            if control_active("claw_angle_preset_high"):
+                claw_angle = 100
+            if control_active("syringe_open"):
+                syringe_angle = 180
+            if control_active("syringe_close"):
+                syringe_angle = 0
+
+            control_input[8] = claw_angle
+            control_input[9] = claw_rotate
+            control_input[10] = syringe_angle
+            control_input[11] = camera_angle
+            control_input[12] = enable_stabilization
 
             # Check for stabilization button pressed
             if stabilization_pressed:
@@ -210,10 +238,10 @@ try:
             control_input[12] = enable_stabilization
 
             # Check joystick axes
-            yaw = joystick.get_axis(0)
-            forward_backward = -joystick.get_axis(3)
-            left_right = joystick.get_axis(2)
-            up_down = joystick.get_axis(1)
+            yaw = joystick.get_axis(2)
+            forward_backward = -joystick.get_axis(1)
+            left_right = joystick.get_axis(0)
+            up_down = joystick.get_axis(3)
 
             # Apply deadband to joystick input
             forward_backward = 0 if abs(forward_backward) < DEADBAND else forward_backward
