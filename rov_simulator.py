@@ -14,7 +14,6 @@ CAMERA_YAW_SPEED = 1.8
 CAMERA_PITCH_SPEED = 1.3
 CAMERA_ZOOM_SPEED = 3.5
 CAMERA_FOLLOW_SMOOTHING = 6.0
-CAMERA_FOCAL_LENGTH = 520.0
 FLOOR_Y = -3.0
 
 PS3_LAYOUT = {
@@ -72,10 +71,6 @@ def vec_cross(a: Sequence[float], b: Sequence[float]) -> List[float]:
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
     ]
-
-
-def vec_dot(a: Sequence[float], b: Sequence[float]) -> float:
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
 
 def vec_normalize(v: Sequence[float]) -> List[float]:
@@ -514,46 +509,34 @@ class Camera:
         ]
 
 
-def camera_basis(camera: Camera) -> Tuple[List[float], List[float], List[float], List[float]]:
-    forward = [
-        math.cos(camera.pitch) * math.cos(camera.yaw),
-        math.sin(camera.pitch),
-        math.cos(camera.pitch) * math.sin(camera.yaw),
-    ]
-    world_up = [0.0, 1.0, 0.0]
-    right = vec_normalize(vec_cross(world_up, forward))
-    up = vec_cross(forward, right)
-    camera_pos = [
-        camera.target[0] - forward[0] * camera.distance,
-        camera.target[1] - forward[1] * camera.distance,
-        camera.target[2] - forward[2] * camera.distance,
-    ]
-    return camera_pos, right, up, forward
+def rotate_point(point: Tuple[float, float, float], rotation: Tuple[float, float, float]):
+    x, y, z = point
+    pitch, yaw, roll = rotation
+
+    # Apply simulator-axis rotations as roll(X) -> pitch(Z) -> yaw(Y).
+    # This keeps camera pitch aligned with the simulator's pitch convention.
+    cr, sr = math.cos(roll), math.sin(roll)
+    y, z = y * cr - z * sr, y * sr + z * cr
+
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    x, y = x * cp - y * sp, x * sp + y * cp
+
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    x, z = x * cy + z * sy, -x * sy + z * cy
+    return [x, y, z]
 
 
-def world_to_screen(point_world: Sequence[float], camera: Camera) -> Optional[Tuple[int, int]]:
-    camera_pos, right, up, forward = camera_basis(camera)
+def world_to_screen(point_world: Sequence[float], camera: Camera) -> Tuple[int, int]:
     relative_point = [
-        point_world[0] - camera_pos[0],
-        point_world[1] - camera_pos[1],
-        point_world[2] - camera_pos[2],
+        point_world[0] - camera.target[0],
+        point_world[1] - camera.target[1],
+        point_world[2] - camera.target[2],
     ]
-
-    view_x = vec_dot(relative_point, right)
-    view_y = vec_dot(relative_point, up)
-    view_z = vec_dot(relative_point, forward)
-
-    if view_z <= 0.05 or not all(math.isfinite(v) for v in (view_x, view_y, view_z)):
-        return None
-
-    x = view_x * CAMERA_FOCAL_LENGTH / view_z + WINDOW_SIZE[0] / 2
-    y = -view_y * CAMERA_FOCAL_LENGTH / view_z + WINDOW_SIZE[1] / 2
-
-    if not (math.isfinite(x) and math.isfinite(y)):
-        return None
-    if abs(x) > 1e6 or abs(y) > 1e6:
-        return None
-    return int(x), int(y)
+    point = rotate_point(tuple(relative_point), (camera.pitch, camera.yaw, 0.0))
+    scale = camera.distance / (camera.distance + point[2] + 1e-4)
+    x = int(point[0] * 120 * scale + WINDOW_SIZE[0] / 2)
+    y = int(-point[1] * 120 * scale + WINDOW_SIZE[1] / 2)
+    return x, y
 
 
 def to_world(local_point: Tuple[float, float, float], sim: ROVSimulator) -> List[float]:
@@ -583,20 +566,7 @@ def draw_rov(screen: pygame.Surface, sim: ROVSimulator, thrusters: List[float], 
     projected = [world_to_screen(v, camera) for v in world_vertices]
 
     for edge in edges:
-        start = projected[edge[0]]
-        end = projected[edge[1]]
-        if start is not None and end is not None:
-            pygame.draw.line(screen, (185, 220, 255), start, end, 2)
-
-    label_font = pygame.font.SysFont("Consolas", 18)
-    front_center_world = to_world((-half[0], 0.0, 0.0), sim)
-    back_center_world = to_world((half[0], 0.0, 0.0), sim)
-    front_px = world_to_screen(front_center_world, camera)
-    back_px = world_to_screen(back_center_world, camera)
-    if front_px is not None:
-        screen.blit(label_font.render("FRONT", True, (255, 240, 120)), (front_px[0] - 36, front_px[1] - 26))
-    if back_px is not None:
-        screen.blit(label_font.render("BACK", True, (255, 190, 120)), (back_px[0] - 28, back_px[1] - 26))
+        pygame.draw.line(screen, (185, 220, 255), projected[edge[0]], projected[edge[1]], 2)
 
     label_font = pygame.font.SysFont("Consolas", 18)
     front_center_world = to_world((-half[0], 0.0, 0.0), sim)
@@ -609,8 +579,6 @@ def draw_rov(screen: pygame.Surface, sim: ROVSimulator, thrusters: List[float], 
     for index, thruster in enumerate(THRUSTERS):
         center_world = to_world(thruster.position, sim)
         center_px = world_to_screen(center_world, camera)
-        if center_px is None:
-            continue
 
         base_direction = vec_normalize(thruster.positive_direction)
         direction_world = sim.rotate_body_to_world(base_direction)
@@ -630,31 +598,28 @@ def draw_rov(screen: pygame.Surface, sim: ROVSimulator, thrusters: List[float], 
         end_px = world_to_screen(axis_end_world, camera)
         radius = 5
 
-        if start_px is not None and end_px is not None:
-            dx = end_px[0] - start_px[0]
-            dy = end_px[1] - start_px[1]
-            segment_len = math.hypot(dx, dy)
-            if segment_len > 1e-4:
-                nx = -dy / segment_len
-                ny = dx / segment_len
-                body_poly = [
-                    (int(start_px[0] + nx * radius), int(start_px[1] + ny * radius)),
-                    (int(end_px[0] + nx * radius), int(end_px[1] + ny * radius)),
-                    (int(end_px[0] - nx * radius), int(end_px[1] - ny * radius)),
-                    (int(start_px[0] - nx * radius), int(start_px[1] - ny * radius)),
-                ]
-                pygame.draw.polygon(screen, (165, 165, 172), body_poly)
+        dx = end_px[0] - start_px[0]
+        dy = end_px[1] - start_px[1]
+        segment_len = math.hypot(dx, dy)
+        if segment_len > 1e-4:
+            nx = -dy / segment_len
+            ny = dx / segment_len
+            body_poly = [
+                (int(start_px[0] + nx * radius), int(start_px[1] + ny * radius)),
+                (int(end_px[0] + nx * radius), int(end_px[1] + ny * radius)),
+                (int(end_px[0] - nx * radius), int(end_px[1] - ny * radius)),
+                (int(start_px[0] - nx * radius), int(start_px[1] - ny * radius)),
+            ]
+            pygame.draw.polygon(screen, (165, 165, 172), body_poly)
 
-            pygame.draw.circle(screen, (204, 204, 212), start_px, radius)
-            pygame.draw.circle(screen, (204, 204, 212), end_px, radius)
-            pygame.draw.circle(screen, (130, 130, 140), start_px, radius, 1)
-            pygame.draw.circle(screen, (130, 130, 140), end_px, radius, 1)
+        pygame.draw.circle(screen, (204, 204, 212), start_px, radius)
+        pygame.draw.circle(screen, (204, 204, 212), end_px, radius)
+        pygame.draw.circle(screen, (130, 130, 140), start_px, radius, 1)
+        pygame.draw.circle(screen, (130, 130, 140), end_px, radius, 1)
 
         # Indicator shows direction of applied push force (opposite prop wash velocity).
         thrust_tip_world = vec_add(center_world, vec_scale(direction_world, thrusters[index] * 0.65))
-        thrust_tip_px = world_to_screen(thrust_tip_world, camera)
-        if thrust_tip_px is not None:
-            pygame.draw.line(screen, color, center_px, thrust_tip_px, 4)
+        pygame.draw.line(screen, color, center_px, world_to_screen(thrust_tip_world, camera), 4)
 
         label = label_font.render(thruster.motor_label, True, (245, 245, 150))
         screen.blit(label, (center_px[0] + 8, center_px[1] - 10))
@@ -664,7 +629,7 @@ def draw_pool_floor(screen: pygame.Surface, camera: Camera):
     line_color = (35, 70, 105)
     axis_color = (55, 95, 140)
     grid_spacing = 1.0
-    half_extent = 36
+    half_extent = 24
 
     origin_x = round(camera.target[0] / grid_spacing)
     origin_z = round(camera.target[2] / grid_spacing)
@@ -673,15 +638,13 @@ def draw_pool_floor(screen: pygame.Surface, camera: Camera):
         x = (origin_x + index) * grid_spacing
         start = world_to_screen((x, FLOOR_Y, (origin_z - half_extent) * grid_spacing), camera)
         end = world_to_screen((x, FLOOR_Y, (origin_z + half_extent) * grid_spacing), camera)
-        if start is not None and end is not None:
-            pygame.draw.line(screen, axis_color if index == 0 else line_color, start, end, 2 if index == 0 else 1)
+        pygame.draw.line(screen, axis_color if index == 0 else line_color, start, end, 2 if index == 0 else 1)
 
     for index in range(-half_extent, half_extent + 1):
         z = (origin_z + index) * grid_spacing
         start = world_to_screen(((origin_x - half_extent) * grid_spacing, FLOOR_Y, z), camera)
         end = world_to_screen(((origin_x + half_extent) * grid_spacing, FLOOR_Y, z), camera)
-        if start is not None and end is not None:
-            pygame.draw.line(screen, axis_color if index == 0 else line_color, start, end, 2 if index == 0 else 1)
+        pygame.draw.line(screen, axis_color if index == 0 else line_color, start, end, 2 if index == 0 else 1)
 
 
 def draw_hud(
