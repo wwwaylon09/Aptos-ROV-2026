@@ -24,10 +24,6 @@ PS3_LAYOUT = {
     "roll_negative": 7,
     "claw_angle_preset_low": None,
     "claw_angle_preset_high": None,
-    "syringe_open": None,
-    "syringe_close": None,
-    "camera_zero": None,
-    "camera_max": None,
     "stabilization_toggle": 3,
 }
 
@@ -41,12 +37,8 @@ XBOX_ONE_LAYOUT = {
     "pitch_negative": "dpad_down",
     "roll_positive": "dpad_right",
     "roll_negative": "dpad_left",
-    "syringe_open": None,
-    "syringe_close": None,
     "claw_angle_preset_high": None,
     "claw_angle_preset_low": None,
-    "camera_zero": None,
-    "camera_max": None,
     "stabilization_toggle": 7,
 }
 
@@ -75,17 +67,13 @@ controller_layout = PS3_LAYOUT
 # Initial input states
 claw_angle = 50
 claw_rotate = 90
-syringe_angle = 90
-camera_angle = 90
 enable_stabilization = False
 
 # Input array to store joystick inputs
-control_input = [0] * 13
+control_input = [0] * 11
 control_input[8] = claw_angle
 control_input[9] = claw_rotate
-control_input[10] = syringe_angle
-control_input[11] = camera_angle
-control_input[12] = enable_stabilization
+control_input[10] = enable_stabilization
 print(control_input)
 
 
@@ -183,22 +171,12 @@ try:
                         claw_angle = 65
                     if control_active("claw_angle_preset_high", button):
                         claw_angle = 100
-                    if control_active("syringe_open", button):
-                        syringe_angle = 180
-                    if control_active("syringe_close", button):
-                        syringe_angle = 0
-                    if control_active("camera_zero", button):
-                        camera_angle = 0
-                    if control_active("camera_max", button):
-                        camera_angle = 180
                     if control_active("stabilization_toggle", button):
                         stabilization_pressed = True
 
                     control_input[8] = claw_angle
                     control_input[9] = claw_rotate
-                    control_input[10] = syringe_angle
-                    control_input[11] = camera_angle
-                    control_input[12] = enable_stabilization
+                    control_input[10] = enable_stabilization
 
             if control_active("pitch_positive"):
                 pitch = 1
@@ -214,16 +192,10 @@ try:
                 claw_angle = 65
             if control_active("claw_angle_preset_high"):
                 claw_angle = 100
-            if control_active("syringe_open"):
-                syringe_angle = 180
-            if control_active("syringe_close"):
-                syringe_angle = 0
 
             control_input[8] = claw_angle
             control_input[9] = claw_rotate
-            control_input[10] = syringe_angle
-            control_input[11] = camera_angle
-            control_input[12] = enable_stabilization
+            control_input[10] = enable_stabilization
 
             # Check for stabilization button pressed
             if stabilization_pressed:
@@ -235,7 +207,7 @@ try:
                 stabilization_debounce = True
 
             # Ensure latest stabilization value is always transmitted
-            control_input[12] = enable_stabilization
+            control_input[10] = enable_stabilization
 
             # Check joystick axes
             yaw = joystick.get_axis(2)
