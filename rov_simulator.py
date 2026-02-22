@@ -174,7 +174,10 @@ def calculate_orientation_from_sim(sim: "ROVSimulator") -> Tuple[float, float]:
 
     pitch = math.atan2(accel_x, math.sqrt(accel_y**2 + accel_z**2))
     roll = math.atan2(-accel_y, accel_z)
-    return pitch, roll
+
+    # The simulated MPU values have the opposite sign of the physical MPU, so
+    # change the sign to match real-world conditions
+    return -pitch, -roll
 
 
 def apply_stabilization(control_input: List[float], sim: "ROVSimulator") -> Tuple[float, float]:
@@ -187,14 +190,14 @@ def apply_stabilization(control_input: List[float], sim: "ROVSimulator") -> Tupl
         pitch = apply_deadband(pitch, MPU_DEADBAND_DEGREES / 180.0)
         roll = apply_deadband(roll, MPU_DEADBAND_DEGREES / 180.0)
 
-        control_input[0] = merge_inputs(control_input[0], roll - pitch)
-        control_input[1] = merge_inputs(control_input[1], -roll - pitch)
-        control_input[2] = merge_inputs(control_input[2], -roll + pitch)
-        control_input[3] = merge_inputs(control_input[3], roll + pitch)
-        control_input[4] = merge_inputs(control_input[4], roll + pitch)
-        control_input[5] = merge_inputs(control_input[5], -roll + pitch)
-        control_input[6] = merge_inputs(control_input[6], -roll - pitch)
-        control_input[7] = merge_inputs(control_input[7], roll - pitch)
+        control_input[0] = merge_inputs(control_input[0], roll + pitch)
+        control_input[1] = merge_inputs(control_input[1], -roll + pitch)
+        control_input[2] = merge_inputs(control_input[2], -roll - pitch)
+        control_input[3] = merge_inputs(control_input[3], roll - pitch)
+        control_input[4] = merge_inputs(control_input[4], roll - pitch)
+        control_input[5] = merge_inputs(control_input[5], -roll - pitch)
+        control_input[6] = merge_inputs(control_input[6], -roll + pitch)
+        control_input[7] = merge_inputs(control_input[7], roll + pitch)
 
     for i in range(8):
         control_input[i] = clamp(control_input[i])
