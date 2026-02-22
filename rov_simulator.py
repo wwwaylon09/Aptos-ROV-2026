@@ -174,8 +174,11 @@ def calculate_orientation_from_sim(sim: "ROVSimulator") -> Tuple[float, float]:
     accel_y = -body_right
     accel_z = body_up
 
-    pitch = math.atan2(accel_x, math.sqrt(accel_y**2 + accel_z**2))
-    roll = math.atan2(-accel_y, accel_z)
+    # The real control stack treats roll as rotation about the simulator's +X
+    # axis and pitch as rotation about +Z. Return them in that order to match
+    # bottom-side.py expectations and avoid roll jumping to 180° near ±90°.
+    pitch = math.atan2(-accel_y, accel_z)
+    roll = math.atan2(accel_x, math.sqrt(accel_y**2 + accel_z**2))
     return pitch, roll
 
 
