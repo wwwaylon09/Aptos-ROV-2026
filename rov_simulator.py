@@ -7,6 +7,7 @@ import pygame
 WINDOW_SIZE = (1280, 720)
 FPS = 60
 DEADBAND = 0.1
+MPU_DEADBAND_DEGREES = 1.5
 
 # View controls (keyboard): arrow keys rotate camera around ROV, +/- zoom.
 CAMERA_YAW_SPEED = 1.8
@@ -116,6 +117,10 @@ def quat_rotate(point: Sequence[float], q: Sequence[float]) -> List[float]:
     return [x, y, z]
 
 
+def quat_conjugate(q: Sequence[float]) -> List[float]:
+    return [q[0], -q[1], -q[2], -q[3]]
+
+
 def quat_to_euler(q: Sequence[float]) -> List[float]:
     qw, qx, qy, qz = q
 
@@ -131,6 +136,65 @@ def quat_to_euler(q: Sequence[float]) -> List[float]:
     roll = math.atan2(sinr_cosp, cosr_cosp)
 
     return [pitch, yaw, roll]
+
+
+def lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def apply_deadband(value: float, threshold: float) -> float:
+    if abs(value) < threshold:
+        return 0.0
+    return value
+
+
+def merge_inputs(joystick_input: float, mpu_input: float) -> float:
+    if mpu_input < 0:
+        mpu_input = -((-mpu_input) ** 0.5)
+    else:
+        mpu_input **= 0.5
+
+    return lerp(mpu_input, joystick_input, math.fabs(joystick_input))
+
+
+def calculate_orientation_from_sim(sim: "ROVSimulator") -> Tuple[float, float]:
+    # Derive a simulated MPU-6050 accelerometer vector from simulator orientation.
+    # Simulator body axes are +X right, +Y up, +Z forward with yaw around +Y.
+    # Use world-up in body frame, then remap to MPU-style axes expected by
+    # bottom-side.py formulas so yaw does not appear as pitch.
+    body_right, body_up, body_forward = quat_rotate((0.0, 1.0, 0.0), quat_conjugate(sim.orientation))
+    accel_x = body_right
+    accel_y = -body_forward
+    accel_z = body_up
+
+    pitch = math.atan2(accel_x, math.sqrt(accel_y**2 + accel_z**2))
+    roll = math.atan2(-accel_y, accel_z)
+    return pitch, roll
+
+
+def apply_stabilization(control_input: List[float], sim: "ROVSimulator") -> Tuple[float, float]:
+    pitch_rad, roll_rad = calculate_orientation_from_sim(sim)
+
+    if control_input[12]:
+        pitch = pitch_rad / math.pi
+        roll = roll_rad / math.pi
+
+        pitch = apply_deadband(pitch, MPU_DEADBAND_DEGREES / 180.0)
+        roll = apply_deadband(roll, MPU_DEADBAND_DEGREES / 180.0)
+
+        control_input[0] = merge_inputs(control_input[0], roll - pitch)
+        control_input[1] = merge_inputs(control_input[1], -roll - pitch)
+        control_input[2] = merge_inputs(control_input[2], -roll + pitch)
+        control_input[3] = merge_inputs(control_input[3], roll + pitch)
+        control_input[4] = merge_inputs(control_input[4], roll + pitch)
+        control_input[5] = merge_inputs(control_input[5], -roll + pitch)
+        control_input[6] = merge_inputs(control_input[6], -roll - pitch)
+        control_input[7] = merge_inputs(control_input[7], roll - pitch)
+
+    for i in range(8):
+        control_input[i] = clamp(control_input[i])
+
+    return math.degrees(pitch_rad), math.degrees(roll_rad)
 
 
 ControlMapping = Dict[str, Union[int, str]]
@@ -511,7 +575,14 @@ def draw_rov(screen: pygame.Surface, sim: ROVSimulator, thrusters: List[float], 
         screen.blit(label, (center_px[0] + 8, center_px[1] - 10))
 
 
-def draw_hud(screen: pygame.Surface, control_input: List[float], connected: bool, sim: ROVSimulator):
+def draw_hud(
+    screen: pygame.Surface,
+    control_input: List[float],
+    connected: bool,
+    sim: ROVSimulator,
+    mpu_pitch_deg: float,
+    mpu_roll_deg: float,
+):
     font = pygame.font.SysFont("Consolas", 20)
     small = pygame.font.SysFont("Consolas", 16)
     status = "Joystick connected" if connected else "No joystick detected"
@@ -528,6 +599,8 @@ def draw_hud(screen: pygame.Surface, control_input: List[float], connected: bool
         f"Syringe: {control_input[10]:>5.1f}",
         f"Camera Servo: {control_input[11]:>5.1f}",
         f"Stabilization: {'ON' if control_input[12] else 'OFF'}",
+        f"MPU Pitch: {mpu_pitch_deg:>6.2f}",
+        f"MPU Roll:  {mpu_roll_deg:>6.2f}",
     ]
     for i, text in enumerate(telemetry):
         screen.blit(font.render(text, True, (220, 230, 255)), (250, 60 + i * 24))
@@ -564,12 +637,13 @@ def main():
 
         inputs.handle_events(events)
         control_input = inputs.update()
+        mpu_pitch_deg, mpu_roll_deg = apply_stabilization(control_input, sim)
         sim.update(control_input[:8], dt)
         camera.update(pygame.key.get_pressed(), dt)
 
         screen.fill((12, 15, 26))
         draw_rov(screen, sim, control_input[:8], camera)
-        draw_hud(screen, control_input, inputs.joystick is not None, sim)
+        draw_hud(screen, control_input, inputs.joystick is not None, sim, mpu_pitch_deg, mpu_roll_deg)
         pygame.display.flip()
 
     if inputs.joystick is not None:
