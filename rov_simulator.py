@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import pygame
 
@@ -36,12 +36,12 @@ XBOX_ONE_LAYOUT = {
     "claw_angle_decrease": 0,
     "claw_rotate_increase": 3,
     "claw_rotate_decrease": 2,
-    "pitch_positive": 6,
-    "pitch_negative": 4,
+    "pitch_positive": "dpad_up",
+    "pitch_negative": "dpad_down",
     "roll_positive": "dpad_left",
     "roll_negative": "dpad_right",
-    "syringe_open": "dpad_up",
-    "syringe_close": "dpad_down",
+    "syringe_open": 6,
+    "syringe_close": 4,
     "claw_angle_preset_high": 5,
     "claw_angle_preset_low": 7,
     "camera_zero": 9,
@@ -77,7 +77,10 @@ def vec_normalize(v: Sequence[float]) -> List[float]:
     return [v[0] / magnitude, v[1] / magnitude, v[2] / magnitude]
 
 
-def get_controller_layout(joystick_name: str) -> Dict[str, int]:
+ControlMapping = Dict[str, Union[int, str]]
+
+
+def get_controller_layout(joystick_name: str) -> ControlMapping:
     if "xbox" in joystick_name.lower():
         print("Using Xbox One button mapping")
         return XBOX_ONE_LAYOUT
@@ -108,7 +111,7 @@ THRUSTERS = [
 
 class InputModel:
     def __init__(self):
-        self.controller_layout = PS3_LAYOUT
+        self.controller_layout: ControlMapping = PS3_LAYOUT
         self.joystick: Optional[pygame.joystick.Joystick] = None
         self.stabilization_debounce = True
 
@@ -149,52 +152,79 @@ class InputModel:
         pitch = 0
         roll = 0
         stabilization_pressed = False
+        dpad_x = 0
+        dpad_y = 0
+
+        if self.joystick.get_numhats() > 0:
+            dpad_x, dpad_y = self.joystick.get_hat(0)
+
+        def control_active(control_name: str, button: Optional[int] = None) -> bool:
+            mapping = self.controller_layout[control_name]
+            if isinstance(mapping, int):
+                return button == mapping if button is not None else False
+            if mapping == "dpad_left":
+                return dpad_x == -1
+            if mapping == "dpad_right":
+                return dpad_x == 1
+            if mapping == "dpad_up":
+                return dpad_y == 1
+            if mapping == "dpad_down":
+                return dpad_y == -1
+            return False
 
         for button in range(self.joystick.get_numbuttons()):
             pressed = self.joystick.get_button(button)
             if not pressed:
                 continue
-            if button == self.controller_layout["claw_angle_increase"] and self.claw_angle <= 179:
+            if control_active("claw_angle_increase", button) and self.claw_angle <= 179:
                 self.claw_angle += 1
-            elif button == self.controller_layout["claw_angle_decrease"] and self.claw_angle >= 1:
+            elif control_active("claw_angle_decrease", button) and self.claw_angle >= 1:
                 self.claw_angle -= 1
-            if button == self.controller_layout["claw_rotate_increase"] and self.claw_rotate <= 179:
+            if control_active("claw_rotate_increase", button) and self.claw_rotate <= 179:
                 self.claw_rotate += 1
-            elif button == self.controller_layout["claw_rotate_decrease"] and self.claw_rotate >= 1:
+            elif control_active("claw_rotate_decrease", button) and self.claw_rotate >= 1:
                 self.claw_rotate -= 1
-            if button == self.controller_layout["pitch_positive"]:
+            if control_active("pitch_positive", button):
                 pitch = 1
-            elif button == self.controller_layout["pitch_negative"]:
+            elif control_active("pitch_negative", button):
                 pitch = -1
-            if button == self.controller_layout["roll_positive"]:
+            if control_active("roll_positive", button):
                 roll = 1
-            elif button == self.controller_layout["roll_negative"]:
+            elif control_active("roll_negative", button):
                 roll = -1
-            if button == self.controller_layout["claw_angle_preset_low"]:
+            if control_active("claw_angle_preset_low", button):
                 self.claw_angle = 65
-            if button == self.controller_layout["claw_angle_preset_high"]:
+            if control_active("claw_angle_preset_high", button):
                 self.claw_angle = 100
-            if button == self.controller_layout["syringe_open"]:
+            if control_active("syringe_open", button):
                 self.syringe_angle = 180
-            if button == self.controller_layout["syringe_close"]:
+            if control_active("syringe_close", button):
                 self.syringe_angle = 0
-            if button == self.controller_layout["camera_zero"]:
+            if control_active("camera_zero", button):
                 self.camera_angle = 0
-            if button == self.controller_layout["camera_max"]:
+            if control_active("camera_max", button):
                 self.camera_angle = 180
-            if button == self.controller_layout["stabilization_toggle"]:
+            if control_active("stabilization_toggle", button):
                 stabilization_pressed = True
 
-        if self.joystick.get_numhats() > 0:
-            dpad_x, dpad_y = self.joystick.get_hat(0)
-            if self.controller_layout["claw_angle_preset_low"] == "dpad_right" and dpad_x == 1:
-                self.claw_angle = 65
-            if self.controller_layout["claw_angle_preset_high"] == "dpad_left" and dpad_x == -1:
-                self.claw_angle = 100
-            if self.controller_layout["syringe_open"] == "dpad_up" and dpad_y == 1:
-                self.syringe_angle = 180
-            if self.controller_layout["syringe_close"] == "dpad_down" and dpad_y == -1:
-                self.syringe_angle = 0
+        if control_active("pitch_positive"):
+            pitch = 1
+        elif control_active("pitch_negative"):
+            pitch = -1
+
+        if control_active("roll_positive"):
+            roll = 1
+        elif control_active("roll_negative"):
+            roll = -1
+
+        if control_active("claw_angle_preset_low"):
+            self.claw_angle = 65
+        if control_active("claw_angle_preset_high"):
+            self.claw_angle = 100
+        if control_active("syringe_open"):
+            self.syringe_angle = 180
+        if control_active("syringe_close"):
+            self.syringe_angle = 0
 
         if stabilization_pressed:
             if self.stabilization_debounce:
@@ -313,11 +343,11 @@ def rotate_point(point: Tuple[float, float, float], rotation: Tuple[float, float
     x, y, z = point
     pitch, yaw, roll = rotation
 
-    cp, sp = math.cos(pitch), math.sin(pitch)
-    y, z = y * cp - z * sp, y * sp + z * cp
-
     cy, sy = math.cos(yaw), math.sin(yaw)
     x, z = x * cy + z * sy, -x * sy + z * cy
+
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    y, z = y * cp - z * sp, y * sp + z * cp
 
     cr, sr = math.cos(roll), math.sin(roll)
     x, y = x * cr - y * sr, x * sr + y * cr
