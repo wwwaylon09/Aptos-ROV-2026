@@ -6,7 +6,7 @@ import pygame
 
 WINDOW_SIZE = (1280, 720)
 FPS = 60
-DEADBAND = 0.05
+DEADBAND = 0.1
 
 # View controls (keyboard): arrow keys rotate camera around ROV, +/- zoom.
 CAMERA_YAW_SPEED = 1.8
@@ -14,20 +14,20 @@ CAMERA_PITCH_SPEED = 1.3
 CAMERA_ZOOM_SPEED = 3.5
 
 PS3_LAYOUT = {
-    "claw_angle_increase": 9,
-    "claw_angle_decrease": 8,
-    "claw_rotate_increase": 11,
-    "claw_rotate_decrease": 10,
-    "pitch_positive": 6,
-    "pitch_negative": 4,
+    "claw_angle_increase": 13,
+    "claw_angle_decrease": 14,
+    "claw_rotate_increase": 12,
+    "claw_rotate_decrease": 15,
+    "pitch_positive": 4,
+    "pitch_negative": 6,
     "roll_positive": 5,
     "roll_negative": 7,
-    "claw_angle_preset_low": 14,
-    "claw_angle_preset_high": 13,
-    "syringe_open": 12,
-    "syringe_close": 15,
-    "camera_zero": 1,
-    "camera_max": 2,
+    "claw_angle_preset_low": None,
+    "claw_angle_preset_high": None,
+    "syringe_open": None,
+    "syringe_close": None,
+    "camera_zero": None,
+    "camera_max": None,
     "stabilization_toggle": 3,
 }
 
@@ -38,15 +38,15 @@ XBOX_ONE_LAYOUT = {
     "claw_rotate_decrease": 2,
     "pitch_positive": "dpad_up",
     "pitch_negative": "dpad_down",
-    "roll_positive": "dpad_left",
-    "roll_negative": "dpad_right",
-    "syringe_open": 6,
-    "syringe_close": 4,
-    "claw_angle_preset_high": 5,
-    "claw_angle_preset_low": 7,
-    "camera_zero": 9,
-    "camera_max": 10,
-    "stabilization_toggle": 8,
+    "roll_positive": "dpad_right",
+    "roll_negative": "dpad_left",
+    "syringe_open": None,
+    "syringe_close": None,
+    "claw_angle_preset_high": None,
+    "claw_angle_preset_low": None,
+    "camera_zero": None,
+    "camera_max": None,
+    "stabilization_toggle": 7,
 }
 
 
