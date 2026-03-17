@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-import os
+import math
 import signal
 import socket
 import sys
@@ -29,6 +29,8 @@ DEPTH_TOLERANCE_METERS = 0.33
 HOLD_AT_TARGET_SECONDS = 30
 HOLD_AT_SURFACE_SECONDS = 30
 PROFILE_CYCLE_COUNT = 2
+IGNORE_SENSOR_DEPTH_REQUIREMENT = False
+DEPTH_WAIT_TIMEOUT_SECONDS = 45
 
 STEPPER_STEP_ANGLE_DEGREES = 1.8
 STEPPER_DESCENT_ANGLE_DEGREES = 360.0
@@ -36,6 +38,12 @@ STEPPER_DIRECTION_PIN = 20
 STEPPER_STEP_PIN = 21
 STEPPER_PULSE_HIGH_SECONDS = 0.001
 STEPPER_STEP_PERIOD_SECONDS = 0.003
+
+SENSOR_INIT_RETRIES = 5
+SENSOR_INIT_RETRY_DELAY_SECONDS = 1.0
+SENSOR_READ_RETRIES = 3
+SENSOR_READ_RETRY_DELAY_SECONDS = 0.25
+ALLOW_PROFILE_WITHOUT_SENSOR = True
 
 # Sensor depth when the top is 40 cm below surface.
 SURFACE_SENSOR_DEPTH_METERS = TOP_SURFACE_DEPTH_METERS + DEVICE_VERTICAL_LENGTH_METERS
@@ -58,6 +66,8 @@ class DataPacket:
     time_label: str
     pressure_kpa: float
     depth_m: float
+    packet_type: str = "telemetry"
+    stage: str = ""
 
 
 class StepperController:
@@ -93,16 +103,43 @@ class PressureSensor:
             raise RuntimeError("ms5837 library is required and could not be imported")
 
         self.sensor = ms5837.MS5837_02BA()
-        if not self.sensor.init():
+        self.available = False
+
+        for attempt in range(1, SENSOR_INIT_RETRIES + 1):
+            try:
+                if self.sensor.init():
+                    self.sensor.setFluidDensity(ms5837.DENSITY_FRESHWATER)
+                    self.available = True
+                    break
+            except OSError as exc:
+                print(f"[SERVER] Sensor init attempt {attempt}/{SENSOR_INIT_RETRIES} failed: {exc}")
+
+            if attempt < SENSOR_INIT_RETRIES:
+                time.sleep(SENSOR_INIT_RETRY_DELAY_SECONDS)
+
+        if not self.available and not ALLOW_PROFILE_WITHOUT_SENSOR:
             raise RuntimeError("MS5837 init failed; aborting")
-        self.sensor.setFluidDensity(ms5837.DENSITY_FRESHWATER)
+        if not self.available:
+            print("[SERVER] WARNING: sensor unavailable; telemetry packets will contain NaN values.")
 
     def read(self) -> tuple[float, float]:
-        if not self.sensor.read(ms5837.OSR_8192):
-            raise RuntimeError("MS5837 read failed; aborting")
-        pressure_kpa = float(self.sensor.pressure(ms5837.UNITS_kPa))
-        depth_m = float(self.sensor.depth())
-        return pressure_kpa, depth_m
+        if not self.available:
+            return float("nan"), float("nan")
+
+        for attempt in range(1, SENSOR_READ_RETRIES + 1):
+            try:
+                if self.sensor.read(ms5837.OSR_8192):
+                    pressure_kpa = float(self.sensor.pressure(ms5837.UNITS_kPa))
+                    depth_m = float(self.sensor.depth())
+                    return pressure_kpa, depth_m
+            except OSError as exc:
+                print(f"[SERVER] Sensor read attempt {attempt}/{SENSOR_READ_RETRIES} failed: {exc}")
+
+            if attempt < SENSOR_READ_RETRIES:
+                time.sleep(SENSOR_READ_RETRY_DELAY_SECONDS)
+
+        print("[SERVER] WARNING: sensor read failed; recording NaN packet values.")
+        return float("nan"), float("nan")
 
 
 class ProfilingController:
@@ -120,12 +157,7 @@ class ProfilingController:
         minutes, remaining = divmod(max(0, seconds), 60)
         return f"{minutes}:{remaining:02d}"
 
-    @staticmethod
-    def _abort(message: str) -> None:
-        print(f"[SERVER] FATAL: {message}")
-        os._exit(1)
-
-    def _build_packet(self) -> DataPacket:
+    def _build_packet(self, packet_type: str = "telemetry", stage: str = "") -> DataPacket:
         elapsed = 0
         if self.arm_time_monotonic is not None:
             elapsed = int(time.monotonic() - self.arm_time_monotonic)
@@ -137,14 +169,12 @@ class ProfilingController:
             time_label=self._format_elapsed(elapsed),
             pressure_kpa=pressure_kpa,
             depth_m=depth_m,
+            packet_type=packet_type,
+            stage=stage,
         )
 
-    def _log_packet(self, stage_label: str) -> None:
-        try:
-            packet = self._build_packet()
-        except Exception as exc:
-            self._abort(f"unable to acquire packet during '{stage_label}': {exc}")
-            return
+    def _log_packet(self, stage_label: str, packet_type: str = "telemetry") -> DataPacket:
+        packet = self._build_packet(packet_type=packet_type, stage=stage_label)
 
         with self.data_lock:
             self.data_packets.append(packet)
@@ -153,6 +183,7 @@ class ProfilingController:
             f"[SERVER] {stage_label}: {packet.number}, {packet.time_label}, "
             f"{packet.pressure_kpa:.2f} kPa, {packet.depth_m:.2f} m"
         )
+        return packet
 
     def arm(self) -> tuple[bool, DataPacket | None]:
         if self.profile_running:
@@ -164,12 +195,7 @@ class ProfilingController:
         self.profile_running = True
         self.arm_time_monotonic = time.monotonic()
 
-        try:
-            initial_packet = self._build_packet()
-        except Exception as exc:
-            self.profile_running = False
-            self._abort(f"unable to acquire start packet: {exc}")
-            return False, None
+        initial_packet = self._build_packet(packet_type="stage", stage="PROFILE STARTED")
 
         with self.data_lock:
             self.data_packets.append(initial_packet)
@@ -184,9 +210,29 @@ class ProfilingController:
         return True, initial_packet
 
     def _hold_and_log(self, seconds: int, stage_label: str) -> None:
-        for _ in range(seconds):
+        end_time = time.monotonic() + seconds
+        while time.monotonic() < end_time:
             self._log_packet(stage_label)
-            time.sleep(1)
+            remaining = end_time - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(1.0, remaining))
+
+    def _wait_for_depth(self, target_depth_meters: float, stage_label: str) -> None:
+        if IGNORE_SENSOR_DEPTH_REQUIREMENT:
+            print(f"[SERVER] {stage_label}: depth wait bypassed by config.")
+            return
+
+        deadline = time.monotonic() + DEPTH_WAIT_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            packet = self._log_packet(f"{stage_label} SEEKING")
+            if math.isnan(packet.depth_m):
+                time.sleep(1.0)
+                continue
+            if abs(packet.depth_m - target_depth_meters) <= DEPTH_TOLERANCE_METERS:
+                return
+            time.sleep(1.0)
+
+        print(f"[SERVER] WARNING: timed out waiting for target depth during {stage_label}.")
 
     def _profile_worker(self) -> None:
         print(f"[SERVER] Profiling armed. Waiting {PROFILE_START_DELAY_SECONDS}s before start.")
@@ -194,15 +240,21 @@ class ProfilingController:
 
         for cycle in range(1, PROFILE_CYCLE_COUNT + 1):
             print(f"[SERVER] DESCENT {cycle} STARTED")
+            self._log_packet(f"DESCENT {cycle} STARTED", packet_type="stage")
             self.stepper.rotate(STEPPER_DESCENT_ANGLE_DEGREES, clockwise=False)
 
+            self._wait_for_depth(TARGET_SENSOR_DEPTH_METERS, f"DESCENT {cycle}")
             print(f"[SERVER] DESCENT {cycle} HOLDING")
+            self._log_packet(f"DESCENT {cycle} HOLDING", packet_type="stage")
             self._hold_and_log(HOLD_AT_TARGET_SECONDS, f"DESCENT {cycle} HOLDING")
 
             print(f"[SERVER] ASCENT {cycle} STARTED")
+            self._log_packet(f"ASCENT {cycle} STARTED", packet_type="stage")
             self.stepper.rotate(STEPPER_DESCENT_ANGLE_DEGREES, clockwise=True)
 
+            self._wait_for_depth(SURFACE_SENSOR_DEPTH_METERS, f"ASCENT {cycle}")
             print(f"[SERVER] ASCENT {cycle} HOLDING")
+            self._log_packet(f"ASCENT {cycle} HOLDING", packet_type="stage")
             self._hold_and_log(HOLD_AT_SURFACE_SECONDS, f"ASCENT {cycle} HOLDING")
 
         self.profile_running = False
