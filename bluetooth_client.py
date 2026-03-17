@@ -1,148 +1,85 @@
 #!/usr/bin/env python3
-"""Bluetooth RFCOMM client for arming and collecting profiler data."""
+"""Windows Bluetooth RFCOMM client (direct MAC+channel mode).
+
+Configuration is done via LOUD_SNAKE_CASE constants below.
+No argparse and no COM/SDP infrastructure are used.
+"""
 
 from __future__ import annotations
 
-import argparse
-import json
 import socket
-from dataclasses import dataclass
-from typing import List
+import time
 
 # =========================
 # Runtime configuration
 # =========================
-SERVER_BT_MAC_ADDRESS = "00:00:00:00:00:00"
+SERVER_BT_MAC_ADDRESS = "00:00:00:00:00:00"  # Set Raspberry Pi Bluetooth MAC
 RFCOMM_CHANNEL = 3
-CONNECT_TIMEOUT_SECONDS = 10.0
-RECV_BUFFER_SIZE = 1024
-PLOT_OUTPUT_PATH = "profile_depth_plot.png"
+READ_TIMEOUT_SECONDS = 0.2
+PING_MODE = True
+PING_INTERVAL_SECONDS = 1.0
+EXPECT_RESPONSE = True
 
 
-@dataclass
-class DataPacket:
-    number: str
-    elapsed_seconds: int
-    time_label: str
-    pressure_kpa: float
-    depth_m: float
+def read_line(sock: socket.socket, buffer: bytes) -> tuple[bytes, bytes]:
+    while b"\n" not in buffer:
+        try:
+            chunk = sock.recv(1024)
+            if not chunk:
+                return b"", b""
+            buffer += chunk
+        except TimeoutError:
+            return b"", buffer
 
-
-def recv_line(sock: socket.socket, carry: bytes) -> tuple[str | None, bytes]:
-    while b"\n" not in carry:
-        chunk = sock.recv(RECV_BUFFER_SIZE)
-        if not chunk:
-            return None, b""
-        carry += chunk
-
-    raw_line, carry = carry.split(b"\n", 1)
-    return raw_line.decode("utf-8", errors="replace").strip(), carry
-
-
-def send_command(command: str) -> socket.socket:
-    sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
-    sock.settimeout(CONNECT_TIMEOUT_SECONDS)
-    sock.connect((SERVER_BT_MAC_ADDRESS, RFCOMM_CHANNEL))
-    sock.sendall((command + "\n").encode("utf-8"))
-    return sock
-
-
-def decode_packet(payload_line: str) -> DataPacket:
-    payload = json.loads(payload_line)
-    return DataPacket(
-        number=str(payload["number"]),
-        elapsed_seconds=int(payload["elapsed_seconds"]),
-        time_label=str(payload["time_label"]),
-        pressure_kpa=float(payload["pressure_kpa"]),
-        depth_m=float(payload["depth_m"]),
-    )
-
-
-def run_start() -> None:
-    sock = send_command("start")
-    carry = b""
-    try:
-        response, carry = recv_line(sock, carry)
-        if response is None:
-            print("[CLIENT] No response from server.")
-            return
-        print(f"[CLIENT] {response}")
-
-        if response.startswith("OK"):
-            packet_line, carry = recv_line(sock, carry)
-            if packet_line is not None:
-                packet = decode_packet(packet_line)
-                print(f"[CLIENT] START PACKET -> {packet.number} {packet.time_label} {packet.pressure_kpa:.2f} kPa {packet.depth_m:.2f} meters")
-    finally:
-        sock.close()
-
-
-def run_collect() -> None:
-    sock = send_command("collect")
-    carry = b""
-    packets: List[DataPacket] = []
-
-    try:
-        start_line, carry = recv_line(sock, carry)
-        if start_line is None or not start_line.startswith("DATA_BEGIN"):
-            print(f"[CLIENT] Unexpected response: {start_line}")
-            return
-
-        while True:
-            line, carry = recv_line(sock, carry)
-            if line is None:
-                break
-            if line == "DATA_END":
-                break
-            packets.append(decode_packet(line))
-    finally:
-        sock.close()
-
-    if not packets:
-        print("[CLIENT] No profiling data received.")
-        return
-
-    print(f"{'Number':<10}{'Time':<10}{'Pressure':<18}{'Depth':<18}")
-    for packet in packets:
-        print(
-            f"{packet.number:<10}"
-            f"{packet.time_label:<10}"
-            f"{packet.pressure_kpa:.2f} kPa{'':<8}"
-            f"{packet.depth_m:.2f} meters"
-        )
-
-    try:
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("[CLIENT] matplotlib not installed; skipping plot generation.")
-        return
-
-    x_seconds = [p.elapsed_seconds for p in packets]
-    y_depth = [p.depth_m for p in packets]
-
-    plt.figure(figsize=(10, 5))
-    plt.plot(x_seconds, y_depth, marker="o", linewidth=1)
-    plt.title("Vertical Profiler Depth vs Time")
-    plt.xlabel("Time (seconds)")
-    plt.ylabel("Depth (meters)")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(PLOT_OUTPUT_PATH, dpi=150)
-    print(f"[CLIENT] Plot saved to {PLOT_OUTPUT_PATH}")
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Bluetooth profiler client")
-    parser.add_argument("command", choices=["start", "collect"], help="Command to send to server")
-    return parser.parse_args()
+    line, buffer = buffer.split(b"\n", 1)
+    return line + b"\n", buffer
 
 
 def main() -> None:
-    args = parse_args()
-    if args.command == "start":
-        run_start()
-    else:
-        run_collect()
+    sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+    sock.settimeout(10.0)
+    sock.connect((SERVER_BT_MAC_ADDRESS, RFCOMM_CHANNEL))
+    sock.settimeout(READ_TIMEOUT_SECONDS)
+
+    print(f"[CLIENT] Connected to {SERVER_BT_MAC_ADDRESS} channel {RFCOMM_CHANNEL}")
+
+    rx_buffer = b""
+    counter = 0
+
+    try:
+        if PING_MODE:
+            print("[CLIENT] Ping mode started. Ctrl+C to stop.")
+            while True:
+                counter += 1
+                line = f"ping {counter} @ {time.time():.3f}"
+                sock.sendall((line + "\n").encode("utf-8"))
+                print(f"[SEND] {line}")
+
+                if EXPECT_RESPONSE:
+                    response, rx_buffer = read_line(sock, rx_buffer)
+                    if response:
+                        print(f"[RECV] {response.decode('utf-8', errors='replace').rstrip()}")
+
+                time.sleep(PING_INTERVAL_SECONDS)
+        else:
+            print("[CLIENT] Interactive mode started. Ctrl+C to stop.")
+            while True:
+                line = input("> ").strip()
+                if not line:
+                    continue
+
+                sock.sendall((line + "\n").encode("utf-8"))
+                print(f"[SEND] {line}")
+
+                if EXPECT_RESPONSE:
+                    response, rx_buffer = read_line(sock, rx_buffer)
+                    if response:
+                        print(f"[RECV] {response.decode('utf-8', errors='replace').rstrip()}")
+
+    except KeyboardInterrupt:
+        print("\n[CLIENT] Stopped.")
+    finally:
+        sock.close()
 
 
 if __name__ == "__main__":
