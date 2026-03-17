@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import socket
-import time
 from dataclasses import dataclass
 from typing import List
 
@@ -16,8 +15,6 @@ from typing import List
 SERVER_BT_MAC_ADDRESS = "00:00:00:00:00:00"
 RFCOMM_CHANNEL = 3
 CONNECT_TIMEOUT_SECONDS = 10.0
-CONNECT_RETRIES = 3
-CONNECT_RETRY_DELAY_SECONDS = 1.0
 RECV_BUFFER_SIZE = 1024
 PLOT_OUTPUT_PATH = "profile_depth_plot.png"
 
@@ -29,8 +26,6 @@ class DataPacket:
     time_label: str
     pressure_kpa: float
     depth_m: float
-    packet_type: str = "telemetry"
-    stage: str = ""
 
 
 def recv_line(sock: socket.socket, carry: bytes) -> tuple[str | None, bytes]:
@@ -45,23 +40,11 @@ def recv_line(sock: socket.socket, carry: bytes) -> tuple[str | None, bytes]:
 
 
 def send_command(command: str) -> socket.socket:
-    last_error: OSError | None = None
-
-    for attempt in range(1, CONNECT_RETRIES + 1):
-        sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
-        sock.settimeout(CONNECT_TIMEOUT_SECONDS)
-        try:
-            sock.connect((SERVER_BT_MAC_ADDRESS, RFCOMM_CHANNEL))
-            sock.sendall((command + "\n").encode("utf-8"))
-            return sock
-        except OSError as exc:
-            last_error = exc
-            sock.close()
-            if attempt < CONNECT_RETRIES:
-                print(f"[CLIENT] Connect attempt {attempt}/{CONNECT_RETRIES} failed: {exc}. Retrying...")
-                time.sleep(CONNECT_RETRY_DELAY_SECONDS)
-
-    raise RuntimeError(f"unable to connect after {CONNECT_RETRIES} attempts: {last_error}")
+    sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+    sock.settimeout(CONNECT_TIMEOUT_SECONDS)
+    sock.connect((SERVER_BT_MAC_ADDRESS, RFCOMM_CHANNEL))
+    sock.sendall((command + "\n").encode("utf-8"))
+    return sock
 
 
 def decode_packet(payload_line: str) -> DataPacket:
@@ -72,8 +55,6 @@ def decode_packet(payload_line: str) -> DataPacket:
         time_label=str(payload["time_label"]),
         pressure_kpa=float(payload["pressure_kpa"]),
         depth_m=float(payload["depth_m"]),
-        packet_type=str(payload.get("packet_type", "telemetry")),
-        stage=str(payload.get("stage", "")),
     )
 
 
@@ -123,8 +104,6 @@ def run_collect() -> None:
 
     print(f"{'Number':<10}{'Time':<10}{'Pressure':<18}{'Depth':<18}")
     for packet in packets:
-        if packet.packet_type == "stage" and packet.stage:
-            print(f"[CLIENT] {packet.stage}")
         print(
             f"{packet.number:<10}"
             f"{packet.time_label:<10}"
