@@ -10,7 +10,7 @@ import sys
 import time
 from typing import Callable
 
-SERVER_BT_ADDRESS = getattr(socket, "BDADDR_ANY", "00:00:00:00:00:00")
+SERVER_BT_ADDRESS = socket.BDADDR_ANY
 RFCOMM_CHANNEL = 3
 BUFFER_SIZE = 1024
 
