@@ -32,12 +32,12 @@ PROFILE_CYCLE_COUNT = 2
 IGNORE_SENSOR_DEPTH_REQUIREMENT = False
 DEPTH_WAIT_TIMEOUT_SECONDS = 45
 
-STEPPER_STEP_ANGLE_DEGREES = 1.8
-STEPPER_DESCENT_ANGLE_DEGREES = 360.0
 STEPPER_DIRECTION_PIN = 20
 STEPPER_STEP_PIN = 21
 STEPPER_PULSE_HIGH_SECONDS = 0.001
 STEPPER_STEP_PERIOD_SECONDS = 0.003
+STEPPER_CORRECTION_STEPS_PER_CYCLE = 5
+DEPTH_LOCK_TOLERANCE_METERS = 0.02
 
 SENSOR_INIT_RETRIES = 5
 SENSOR_INIT_RETRY_DELAY_SECONDS = 1.0
@@ -82,8 +82,9 @@ class StepperController:
         rpi_gpio.setup(STEPPER_DIRECTION_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
         rpi_gpio.setup(STEPPER_STEP_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
 
-    def rotate(self, angle_degrees: float, clockwise: bool) -> None:
-        steps = max(0, int(round(abs(angle_degrees) / STEPPER_STEP_ANGLE_DEGREES)))
+    def rotate_steps(self, steps: int, clockwise: bool) -> None:
+        if steps <= 0:
+            return
 
         rpi_gpio.output(STEPPER_DIRECTION_PIN, 1 if clockwise else 0)
         for _ in range(steps):
@@ -210,22 +211,62 @@ class ProfilingController:
             if remaining > 0:
                 time.sleep(min(1.0, remaining))
 
-    def _wait_for_depth(self, target_depth_meters: float, stage_label: str) -> None:
+    def _move_to_depth_feedback(self, target_depth_meters: float, stage_label: str) -> None:
         if IGNORE_SENSOR_DEPTH_REQUIREMENT:
             print(f"[SERVER] {stage_label}: depth wait bypassed by config.")
             return
 
         deadline = time.monotonic() + DEPTH_WAIT_TIMEOUT_SECONDS
-        while time.monotonic() < deadline:
+        while True:
             packet = self._log_packet(f"{stage_label} SEEKING")
             if math.isnan(packet.depth_m):
                 time.sleep(1.0)
+                if time.monotonic() > deadline:
+                    print(f"[SERVER] WARNING: timed out waiting for valid depth during {stage_label}.")
+                    return
                 continue
-            if abs(packet.depth_m - target_depth_meters) <= DEPTH_TOLERANCE_METERS:
-                return
-            time.sleep(1.0)
 
-        print(f"[SERVER] WARNING: timed out waiting for target depth during {stage_label}.")
+            depth_error_m = target_depth_meters - packet.depth_m
+            if abs(depth_error_m) <= DEPTH_LOCK_TOLERANCE_METERS:
+                return
+
+            clockwise = depth_error_m < 0.0
+            self.stepper.rotate_steps(STEPPER_CORRECTION_STEPS_PER_CYCLE, clockwise=clockwise)
+            time.sleep(0.25)
+
+            if time.monotonic() > deadline:
+                print(f"[SERVER] WARNING: timed out moving to target depth during {stage_label}.")
+                return
+
+    def _hold_at_depth_feedback(self, hold_seconds: int, target_depth_meters: float, stage_label: str) -> None:
+        if IGNORE_SENSOR_DEPTH_REQUIREMENT:
+            self._hold_and_log(hold_seconds, stage_label)
+            return
+
+        in_tolerance_seconds = 0.0
+        last_time = time.monotonic()
+
+        while in_tolerance_seconds < hold_seconds:
+            now = time.monotonic()
+            dt = max(0.0, now - last_time)
+            last_time = now
+
+            packet = self._log_packet(
+                f"{stage_label} IN_RANGE {in_tolerance_seconds:.1f}/{hold_seconds}s"
+            )
+            if math.isnan(packet.depth_m):
+                time.sleep(0.5)
+                continue
+
+            depth_error_m = target_depth_meters - packet.depth_m
+            if abs(depth_error_m) <= DEPTH_TOLERANCE_METERS:
+                in_tolerance_seconds += dt
+
+            if abs(depth_error_m) > DEPTH_LOCK_TOLERANCE_METERS:
+                clockwise = depth_error_m < 0.0
+                self.stepper.rotate_steps(STEPPER_CORRECTION_STEPS_PER_CYCLE, clockwise=clockwise)
+
+            time.sleep(0.25)
 
     def _profile_worker(self) -> None:
         print(f"[SERVER] Profiling armed. Waiting {PROFILE_START_DELAY_SECONDS}s before start.")
@@ -234,21 +275,25 @@ class ProfilingController:
         for cycle in range(1, PROFILE_CYCLE_COUNT + 1):
             print(f"[SERVER] DESCENT {cycle} STARTED")
             self._log_packet(f"DESCENT {cycle} STARTED", packet_type="stage")
-            self.stepper.rotate(STEPPER_DESCENT_ANGLE_DEGREES, clockwise=False)
-
-            self._wait_for_depth(TARGET_SENSOR_DEPTH_METERS, f"DESCENT {cycle}")
+            self._move_to_depth_feedback(TARGET_SENSOR_DEPTH_METERS, f"DESCENT {cycle}")
             print(f"[SERVER] DESCENT {cycle} HOLDING")
             self._log_packet(f"DESCENT {cycle} HOLDING", packet_type="stage")
-            self._hold_and_log(HOLD_AT_TARGET_SECONDS, f"DESCENT {cycle} HOLDING")
+            self._hold_at_depth_feedback(
+                HOLD_AT_TARGET_SECONDS,
+                TARGET_SENSOR_DEPTH_METERS,
+                f"DESCENT {cycle} HOLDING",
+            )
 
             print(f"[SERVER] ASCENT {cycle} STARTED")
             self._log_packet(f"ASCENT {cycle} STARTED", packet_type="stage")
-            self.stepper.rotate(STEPPER_DESCENT_ANGLE_DEGREES, clockwise=True)
-
-            self._wait_for_depth(SURFACE_SENSOR_DEPTH_METERS, f"ASCENT {cycle}")
+            self._move_to_depth_feedback(SURFACE_SENSOR_DEPTH_METERS, f"ASCENT {cycle}")
             print(f"[SERVER] ASCENT {cycle} HOLDING")
             self._log_packet(f"ASCENT {cycle} HOLDING", packet_type="stage")
-            self._hold_and_log(HOLD_AT_SURFACE_SECONDS, f"ASCENT {cycle} HOLDING")
+            self._hold_at_depth_feedback(
+                HOLD_AT_SURFACE_SECONDS,
+                SURFACE_SENSOR_DEPTH_METERS,
+                f"ASCENT {cycle} HOLDING",
+            )
 
         self.profile_running = False
         print("[SERVER] Profiling complete. Data ready for collection.")
