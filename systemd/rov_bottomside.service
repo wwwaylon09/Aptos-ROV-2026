@@ -1,0 +1,30 @@
+[Unit]
+Description=Kepler ROV Bottomside Control Service (RPi5)
+Wants=network-online.target
+After=network-online.target systemd-modules-load.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/Aptos-ROV-2026/rov
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/pi/Aptos-ROV-2026
+Environment=VIRTUAL_ENV=/home/pi/venv
+Environment=PATH=/home/pi/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+# Wait up to 30 seconds for I2C to appear before launching hardware init.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do [ -e /dev/i2c-1 ] && exit 0; sleep 1; done; echo "[systemd] /dev/i2c-1 not ready"; exit 1'
+ExecStart=/home/pi/venv/bin/python /home/pi/Aptos-ROV-2026/rov/rov_bottomside.py
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=45
+TimeoutStopSec=15
+KillSignal=SIGINT
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
