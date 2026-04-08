@@ -1,0 +1,26 @@
+[Unit]
+Description=Float Bottomside Service
+Wants=bluetooth.target
+After=bluetooth.target hciuart.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/venv
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/pi/venv
+ExecStart=/usr/bin/python3 /home/pi/venv/float_bottomside.py
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=15
+KillSignal=SIGINT
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
