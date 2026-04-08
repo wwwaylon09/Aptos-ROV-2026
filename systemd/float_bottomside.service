@@ -8,10 +8,12 @@ StartLimitIntervalSec=0
 Type=simple
 User=pi
 Group=pi
-WorkingDirectory=/home/pi/venv
+WorkingDirectory=/home/pi/
 Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONPATH=/home/pi/venv
-ExecStart=/usr/bin/python3 /home/pi/venv/float_bottomside.py
+Environment=PYTHONPATH=/home/pi/
+Environment=VIRTUAL_ENV=/home/pi/venv
+Environment=PATH=/home/pi/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/home/pi/venv/bin/python /home/pi/float_bottomside.py
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=30
