@@ -73,14 +73,14 @@ relay_pin = gpiozero.LED(4)
 pca.frequency = 50
 
 # Motor and Servo configurations
-motor_1 = 0
+motor_1 = 3
 motor_2 = 1
-motor_3 = 2
-motor_4 = 3
+motor_3 = 5
+motor_4 = 7
 motor_5 = 4
-motor_6 = 5
-motor_7 = 6
-motor_8 = 7
+motor_6 = 6
+motor_7 = 2
+motor_8 = 0
 
 claw_open = 15
 claw_rotate = 14
@@ -101,9 +101,9 @@ HUD_STATE = {
 # ---------------- Control Logic ----------------
 def convert(x):
     x = clamp(x)
-    throttle_multiplier = 0.2
-    max_duty_cycle = 5240 + throttle_multiplier * 1640
-    min_duty_cycle = 5240 - throttle_multiplier * 1640
+    throttle_multiplier = 0.4
+    max_duty_cycle = 5488 + throttle_multiplier * 1280
+    min_duty_cycle = 5488 - throttle_multiplier * 1280
     mapped_value = round((((x + 1) / 2) * (max_duty_cycle - min_duty_cycle)) + min_duty_cycle)
     return mapped_value
 
@@ -239,9 +239,9 @@ def setup_server_socket():
 
 
 def run_control_server(stop_event):
+    set_neutral_thrusters()
     print("Powering up ESCs")
     relay_pin.on()
-    set_neutral_thrusters()
 
     server_socket = setup_server_socket()
 
