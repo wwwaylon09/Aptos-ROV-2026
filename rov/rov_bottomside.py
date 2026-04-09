@@ -73,14 +73,14 @@ relay_pin = gpiozero.LED(4)
 pca.frequency = 50
 
 # Motor and Servo configurations
-motor_1 = 3
-motor_2 = 1
-motor_3 = 5
-motor_4 = 7
-motor_5 = 4
-motor_6 = 6
-motor_7 = 2
-motor_8 = 0
+motor_1 = 6
+motor_2 = 4
+motor_3 = 0
+motor_4 = 2
+motor_5 = 1
+motor_6 = 3
+motor_7 = 7
+motor_8 = 5
 
 claw_open = 15
 claw_rotate = 14
