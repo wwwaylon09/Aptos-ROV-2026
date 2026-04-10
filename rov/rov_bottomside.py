@@ -102,8 +102,8 @@ HUD_STATE = {
 def convert(x):
     x = clamp(x)
     throttle_multiplier = 0.4
-    max_duty_cycle = 5488 + throttle_multiplier * 1280
-    min_duty_cycle = 5488 - throttle_multiplier * 1280
+    max_duty_cycle = 5240 + throttle_multiplier * 1640
+    min_duty_cycle = 5240 - throttle_multiplier * 1640
     mapped_value = round((((x + 1) / 2) * (max_duty_cycle - min_duty_cycle)) + min_duty_cycle)
     return mapped_value
 
@@ -288,14 +288,14 @@ def run_control_server(stop_event):
                         pitch = apply_deadband(pitch, MPU_DEADBAND_DEGREES / 180.0)
                         roll = apply_deadband(roll, MPU_DEADBAND_DEGREES / 180.0)
 
-                        inputs[0] = merge_inputs(inputs[0], roll - pitch)
-                        inputs[1] = merge_inputs(inputs[1], -roll - pitch)
-                        inputs[2] = merge_inputs(inputs[2], -roll + pitch)
-                        inputs[3] = merge_inputs(inputs[3], roll + pitch)
-                        inputs[4] = merge_inputs(inputs[4], roll + pitch)
-                        inputs[5] = merge_inputs(inputs[5], -roll + pitch)
-                        inputs[6] = merge_inputs(inputs[6], -roll - pitch)
-                        inputs[7] = merge_inputs(inputs[7], roll - pitch)
+                        inputs[0] = merge_inputs(inputs[0], -roll - pitch)
+                        inputs[1] = merge_inputs(inputs[1], roll - pitch)
+                        inputs[2] = merge_inputs(inputs[2], roll + pitch)
+                        inputs[3] = merge_inputs(inputs[3], -roll + pitch)
+                        inputs[4] = merge_inputs(inputs[4], -roll + pitch)
+                        inputs[5] = merge_inputs(inputs[5], roll + pitch)
+                        inputs[6] = merge_inputs(inputs[6], roll - pitch)
+                        inputs[7] = merge_inputs(inputs[7], -roll - pitch)
 
                     for i in range(8):
                         inputs[i] = clamp(inputs[i])
