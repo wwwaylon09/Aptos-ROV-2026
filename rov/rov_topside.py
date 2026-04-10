@@ -14,9 +14,9 @@ SOCKET_TIMEOUT_SECONDS = 2.0
 
 
 PS3_LAYOUT = {
-    "claw_angle_increase": 13,
+    "claw_angle_increase": 12,
     "claw_angle_decrease": 14,
-    "claw_rotate_increase": 12,
+    "claw_rotate_increase": 13,
     "claw_rotate_decrease": 15,
     "pitch_positive": 4,
     "pitch_negative": 6,
@@ -29,9 +29,9 @@ PS3_LAYOUT = {
 
 # Xbox One maps D-pad to the first hat on most drivers instead of button indices.
 XBOX_ONE_LAYOUT = {
-    "claw_angle_increase": 1,
+    "claw_angle_increase": 3,
     "claw_angle_decrease": 0,
-    "claw_rotate_increase": 3,
+    "claw_rotate_increase": 1,
     "claw_rotate_decrease": 2,
     "pitch_positive": "dpad_up",
     "pitch_negative": "dpad_down",
