@@ -25,7 +25,6 @@ SOCKET_TIMEOUT_SECONDS = 1.0
 MAX_FRAME_SIZE = 65536
 NO_DATA_FAILSAFE_SECONDS = 0.5
 HUD_UPDATE_INTERVAL_SECONDS = 0.2
-MPU_DEADBAND_DEGREES = 1.5
 
 # ---------------- Webcam Server Configuration ----------------
 WEBCAM_HOST = "0.0.0.0"
@@ -128,12 +127,6 @@ def clamp(value, low=-1.0, high=1.0):
     return max(low, min(high, value))
 
 
-
-
-def apply_deadband(value, threshold):
-    if abs(value) < threshold:
-        return 0.0
-    return value
 
 def merge_inputs(joystick_input, mpu_input):
     if mpu_input < 0:
@@ -284,9 +277,6 @@ def run_control_server(stop_event):
                     if inputs[10]:
                         pitch = pitch_rad / math.pi
                         roll = roll_rad / math.pi
-
-                        pitch = apply_deadband(pitch, MPU_DEADBAND_DEGREES / 180.0)
-                        roll = apply_deadband(roll, MPU_DEADBAND_DEGREES / 180.0)
 
                         inputs[0] = merge_inputs(inputs[0], -roll - pitch)
                         inputs[1] = merge_inputs(inputs[1], roll - pitch)
