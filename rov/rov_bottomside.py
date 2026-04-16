@@ -18,6 +18,11 @@ import cv2
 import gpiozero
 from flask import Flask, Response, render_template_string
 
+try:
+    import RPi.GPIO as rpi_gpio
+except ImportError:
+    rpi_gpio = None
+
 # ---------------- Control Server Configuration ----------------
 HOST = ""
 PORT = 5000
@@ -81,15 +86,21 @@ motor_6 = 3
 motor_7 = 7
 motor_8 = 5
 
-claw_open = 15
-claw_rotate = 14
+CLAW_ANGLE_STEP_PIN = 21
+CLAW_ANGLE_DIRECTION_PIN = 20
+CLAW_ROTATE_STEP_PIN = 26
+CLAW_ROTATE_DIRECTION_PIN = 19
+
+STEPPER_PULSE_HIGH_SECONDS = 0.001
+STEPPER_STEP_PERIOD_SECONDS = 0.003
+STEPPER_STEPS_PER_COMMAND = 1
 
 
 HUD_LOCK = threading.Lock()
 HUD_STATE = {
     "thrusters": [0.0] * 8,
-    "claw_angle": 0.0,
-    "claw_rotation": 0.0,
+    "claw_angle_command": 0.0,
+    "claw_rotation_command": 0.0,
     "stabilization_enabled": False,
     "mpu_pitch_deg": 0.0,
     "mpu_roll_deg": 0.0,
@@ -157,8 +168,8 @@ def set_client_connected(connected):
 def update_hud_state(inputs, pitch_deg, roll_deg):
     with HUD_LOCK:
         HUD_STATE["thrusters"] = [float(value) for value in inputs[:8]]
-        HUD_STATE["claw_angle"] = float(inputs[8])
-        HUD_STATE["claw_rotation"] = float(inputs[9])
+        HUD_STATE["claw_angle_command"] = float(inputs[8])
+        HUD_STATE["claw_rotation_command"] = float(inputs[9])
         HUD_STATE["stabilization_enabled"] = bool(inputs[10])
         HUD_STATE["mpu_pitch_deg"] = float(pitch_deg)
         HUD_STATE["mpu_roll_deg"] = float(roll_deg)
@@ -168,8 +179,8 @@ def get_hud_state():
     with HUD_LOCK:
         return {
             "thrusters": [round(value, 3) for value in HUD_STATE["thrusters"]],
-            "claw_angle": round(HUD_STATE["claw_angle"], 3),
-            "claw_rotation": round(HUD_STATE["claw_rotation"], 3),
+            "claw_angle_command": round(HUD_STATE["claw_angle_command"], 3),
+            "claw_rotation_command": round(HUD_STATE["claw_rotation_command"], 3),
             "stabilization_enabled": HUD_STATE["stabilization_enabled"],
             "mpu_pitch_deg": round(HUD_STATE["mpu_pitch_deg"], 2),
             "mpu_roll_deg": round(HUD_STATE["mpu_roll_deg"], 2),
@@ -187,6 +198,59 @@ def apply_thrusters(inputs):
     pca.channels[motor_7].duty_cycle = convert(inputs[6])
     pca.channels[motor_8].duty_cycle = convert(inputs[7])
 
+
+
+
+def setup_steppers():
+    if rpi_gpio is None:
+        print("WARNING: RPi.GPIO is unavailable, claw steppers are disabled")
+        return
+
+    rpi_gpio.setwarnings(False)
+    rpi_gpio.setmode(rpi_gpio.BCM)
+    rpi_gpio.setup(CLAW_ANGLE_DIRECTION_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+    rpi_gpio.setup(CLAW_ANGLE_STEP_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+    rpi_gpio.setup(CLAW_ROTATE_DIRECTION_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+    rpi_gpio.setup(CLAW_ROTATE_STEP_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+
+
+def cleanup_steppers():
+    if rpi_gpio is None:
+        return
+
+    rpi_gpio.cleanup((
+        CLAW_ANGLE_DIRECTION_PIN,
+        CLAW_ANGLE_STEP_PIN,
+        CLAW_ROTATE_DIRECTION_PIN,
+        CLAW_ROTATE_STEP_PIN,
+    ))
+
+
+def pulse_stepper(step_pin, direction_pin, clockwise, steps):
+    if rpi_gpio is None or steps <= 0:
+        return
+
+    rpi_gpio.output(direction_pin, 1 if clockwise else 0)
+    for _ in range(steps):
+        rpi_gpio.output(step_pin, 1)
+        time.sleep(STEPPER_PULSE_HIGH_SECONDS)
+        rpi_gpio.output(step_pin, 0)
+        time.sleep(max(0.0, STEPPER_STEP_PERIOD_SECONDS - STEPPER_PULSE_HIGH_SECONDS))
+
+
+def apply_claw_steppers(inputs):
+    angle_command = int(inputs[8])
+    rotate_command = int(inputs[9])
+
+    if angle_command > 0:
+        pulse_stepper(CLAW_ANGLE_STEP_PIN, CLAW_ANGLE_DIRECTION_PIN, clockwise=True, steps=STEPPER_STEPS_PER_COMMAND)
+    elif angle_command < 0:
+        pulse_stepper(CLAW_ANGLE_STEP_PIN, CLAW_ANGLE_DIRECTION_PIN, clockwise=False, steps=STEPPER_STEPS_PER_COMMAND)
+
+    if rotate_command > 0:
+        pulse_stepper(CLAW_ROTATE_STEP_PIN, CLAW_ROTATE_DIRECTION_PIN, clockwise=True, steps=STEPPER_STEPS_PER_COMMAND)
+    elif rotate_command < 0:
+        pulse_stepper(CLAW_ROTATE_STEP_PIN, CLAW_ROTATE_DIRECTION_PIN, clockwise=False, steps=STEPPER_STEPS_PER_COMMAND)
 
 def read_exact(connection, length):
     buf = b""
@@ -291,6 +355,7 @@ def run_control_server(stop_event):
                         inputs[i] = clamp(inputs[i])
 
                     apply_thrusters(inputs)
+                    apply_claw_steppers(inputs)
                     update_hud_state(inputs, pitch_deg, roll_deg)
 
             except OSError as exc:
@@ -511,8 +576,8 @@ def index():
             stabilizationEl.textContent = stabilizationEnabled ? "Enabled" : "Disabled";
             stabilizationEl.classList.toggle("state-enabled", stabilizationEnabled);
             stabilizationEl.classList.toggle("state-disabled", !stabilizationEnabled);
-            document.getElementById("hud-claw-angle").textContent = formatInput(hud.claw_angle) + "°";
-            document.getElementById("hud-claw-rotation").textContent = formatInput(hud.claw_rotation) + "°";
+            document.getElementById("hud-claw-angle").textContent = formatInput(hud.claw_angle_command);
+            document.getElementById("hud-claw-rotation").textContent = formatInput(hud.claw_rotation_command);
             document.getElementById("hud-mpu-pitch").textContent = formatInput(hud.mpu_pitch_deg) + "°";
             document.getElementById("hud-mpu-roll").textContent = formatInput(hud.mpu_roll_deg) + "°";
 
@@ -558,8 +623,8 @@ def index():
                 <div class="hud-grid">
                     <div class="hud-row"><span class="hud-label">Client</span><span class="hud-value connected-no" id="hud-client-connected">Disconnected</span></div>
                     <div class="hud-row"><span class="hud-label">Stabilization</span><span class="hud-value" id="hud-stabilization">Disabled</span></div>
-                    <div class="hud-row"><span class="hud-label">Claw angle</span><span class="hud-value" id="hud-claw-angle">0.00°</span></div>
-                    <div class="hud-row"><span class="hud-label">Claw rotation</span><span class="hud-value" id="hud-claw-rotation">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">Claw angle cmd</span><span class="hud-value" id="hud-claw-angle">0.00</span></div>
+                    <div class="hud-row"><span class="hud-label">Claw rotate cmd</span><span class="hud-value" id="hud-claw-rotation">0.00</span></div>
                     <div class="hud-row"><span class="hud-label">MPU pitch</span><span class="hud-value" id="hud-mpu-pitch">0.00°</span></div>
                     <div class="hud-row"><span class="hud-label">MPU roll</span><span class="hud-value" id="hud-mpu-roll">0.00°</span></div>
                     <div>
@@ -591,10 +656,12 @@ def stop_all(capture_only=False):
     set_neutral_thrusters()
     if not capture_only:
         relay_pin.off()
+    cleanup_steppers()
 
 
 def main():
     stop_event = threading.Event()
+    setup_steppers()
 
     def handle_shutdown(sig, frame):
         print(f"Received signal {sig}, shutting down...")

@@ -22,8 +22,6 @@ PS3_LAYOUT = {
     "pitch_negative": 6,
     "roll_positive": 5,
     "roll_negative": 7,
-    "claw_angle_preset_low": None,
-    "claw_angle_preset_high": None,
     "stabilization_toggle": 3,
 }
 
@@ -37,8 +35,6 @@ XBOX_ONE_LAYOUT = {
     "pitch_negative": "dpad_down",
     "roll_positive": "dpad_right",
     "roll_negative": "dpad_left",
-    "claw_angle_preset_high": None,
-    "claw_angle_preset_low": None,
     "stabilization_toggle": 7,
 }
 
@@ -65,14 +61,11 @@ joystick: Optional[pygame.joystick.Joystick] = None
 controller_layout = PS3_LAYOUT
 
 # Initial input states
-claw_angle = 50
-claw_rotate = 90
 enable_stabilization = False
 
 # Input array to store joystick inputs
+# [0:8] thrusters, [8] claw angle step command, [9] claw rotate step command, [10] stabilization
 control_input = [0] * 11
-control_input[8] = claw_angle
-control_input[9] = claw_rotate
 control_input[10] = enable_stabilization
 print(control_input)
 
@@ -120,9 +113,11 @@ try:
                 print("Joystick disconnected")
 
         if got_joystick and joystick is not None:
-            # Initialize pitch and roll
+            # Initialize pitch, roll, and claw step commands
             pitch = 0
             roll = 0
+            claw_angle_command = 0
+            claw_rotate_command = 0
 
             # Need this value outside of the loop to prevent it from being falsely set by other buttons
             stabilization_pressed = False
@@ -151,14 +146,14 @@ try:
             for button in range(joystick.get_numbuttons()):
                 pressed = joystick.get_button(button)
                 if pressed:
-                    if control_active("claw_angle_increase", button) and claw_angle <= 179:
-                        claw_angle += 1
-                    elif control_active("claw_angle_decrease", button) and claw_angle >= 1:
-                        claw_angle -= 1
-                    if control_active("claw_rotate_increase", button) and claw_rotate <= 179:
-                        claw_rotate += 1
-                    elif control_active("claw_rotate_decrease", button) and claw_rotate >= 1:
-                        claw_rotate -= 1
+                    if control_active("claw_angle_increase", button):
+                        claw_angle_command = 1
+                    elif control_active("claw_angle_decrease", button):
+                        claw_angle_command = -1
+                    if control_active("claw_rotate_increase", button):
+                        claw_rotate_command = 1
+                    elif control_active("claw_rotate_decrease", button):
+                        claw_rotate_command = -1
                     if control_active("pitch_positive", button):
                         pitch = 1
                     elif control_active("pitch_negative", button):
@@ -167,16 +162,8 @@ try:
                         roll = 1
                     elif control_active("roll_negative", button):
                         roll = -1
-                    if control_active("claw_angle_preset_low", button):
-                        claw_angle = 65
-                    if control_active("claw_angle_preset_high", button):
-                        claw_angle = 100
                     if control_active("stabilization_toggle", button):
                         stabilization_pressed = True
-
-                    control_input[8] = claw_angle
-                    control_input[9] = claw_rotate
-                    control_input[10] = enable_stabilization
 
             if control_active("pitch_positive"):
                 pitch = 1
@@ -188,13 +175,8 @@ try:
             elif control_active("roll_negative"):
                 roll = -1
 
-            if control_active("claw_angle_preset_low"):
-                claw_angle = 65
-            if control_active("claw_angle_preset_high"):
-                claw_angle = 100
-
-            control_input[8] = claw_angle
-            control_input[9] = claw_rotate
+            control_input[8] = claw_angle_command
+            control_input[9] = claw_rotate_command
             control_input[10] = enable_stabilization
 
             # Check for stabilization button pressed
