@@ -95,6 +95,8 @@ STEPPER_PULSE_HIGH_SECONDS = 0.001
 STEPPER_STEP_PERIOD_SECONDS = 0.003
 STEPPER_STEPS_PER_COMMAND = 1
 
+STEPPER_GPIO_BACKEND = "none"
+STEPPER_OUTPUTS = {}
 
 HUD_LOCK = threading.Lock()
 HUD_STATE = {
@@ -202,39 +204,80 @@ def apply_thrusters(inputs):
 
 
 def setup_steppers():
-    if rpi_gpio is None:
-        print("WARNING: RPi.GPIO is unavailable, claw steppers are disabled")
-        return
+    global STEPPER_GPIO_BACKEND
 
-    rpi_gpio.setwarnings(False)
-    rpi_gpio.setmode(rpi_gpio.BCM)
-    rpi_gpio.setup(CLAW_ANGLE_DIRECTION_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
-    rpi_gpio.setup(CLAW_ANGLE_STEP_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
-    rpi_gpio.setup(CLAW_ROTATE_DIRECTION_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
-    rpi_gpio.setup(CLAW_ROTATE_STEP_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+    if rpi_gpio is not None:
+        try:
+            rpi_gpio.setwarnings(False)
+            rpi_gpio.setmode(rpi_gpio.BCM)
+            rpi_gpio.setup(CLAW_ANGLE_DIRECTION_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+            rpi_gpio.setup(CLAW_ANGLE_STEP_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+            rpi_gpio.setup(CLAW_ROTATE_DIRECTION_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+            rpi_gpio.setup(CLAW_ROTATE_STEP_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+            STEPPER_GPIO_BACKEND = "rpi_gpio"
+            return
+        except RuntimeError as exc:
+            print(f"WARNING: RPi.GPIO setup failed ({exc}); falling back to gpiozero output devices")
+
+    try:
+        STEPPER_OUTPUTS[CLAW_ANGLE_DIRECTION_PIN] = gpiozero.OutputDevice(CLAW_ANGLE_DIRECTION_PIN, active_high=True, initial_value=False)
+        STEPPER_OUTPUTS[CLAW_ANGLE_STEP_PIN] = gpiozero.OutputDevice(CLAW_ANGLE_STEP_PIN, active_high=True, initial_value=False)
+        STEPPER_OUTPUTS[CLAW_ROTATE_DIRECTION_PIN] = gpiozero.OutputDevice(CLAW_ROTATE_DIRECTION_PIN, active_high=True, initial_value=False)
+        STEPPER_OUTPUTS[CLAW_ROTATE_STEP_PIN] = gpiozero.OutputDevice(CLAW_ROTATE_STEP_PIN, active_high=True, initial_value=False)
+        STEPPER_GPIO_BACKEND = "gpiozero"
+    except Exception as exc:
+        STEPPER_OUTPUTS.clear()
+        STEPPER_GPIO_BACKEND = "none"
+        print(f"WARNING: Stepper GPIO initialization failed ({exc}); claw steppers are disabled")
 
 
 def cleanup_steppers():
-    if rpi_gpio is None:
-        return
+    global STEPPER_GPIO_BACKEND
 
-    rpi_gpio.cleanup((
-        CLAW_ANGLE_DIRECTION_PIN,
-        CLAW_ANGLE_STEP_PIN,
-        CLAW_ROTATE_DIRECTION_PIN,
-        CLAW_ROTATE_STEP_PIN,
-    ))
+    if STEPPER_GPIO_BACKEND == "rpi_gpio" and rpi_gpio is not None:
+        rpi_gpio.cleanup((
+            CLAW_ANGLE_DIRECTION_PIN,
+            CLAW_ANGLE_STEP_PIN,
+            CLAW_ROTATE_DIRECTION_PIN,
+            CLAW_ROTATE_STEP_PIN,
+        ))
+
+    for device in STEPPER_OUTPUTS.values():
+        device.close()
+    STEPPER_OUTPUTS.clear()
+    STEPPER_GPIO_BACKEND = "none"
 
 
 def pulse_stepper(step_pin, direction_pin, clockwise, steps):
-    if rpi_gpio is None or steps <= 0:
+    if steps <= 0:
         return
 
-    rpi_gpio.output(direction_pin, 1 if clockwise else 0)
+    if STEPPER_GPIO_BACKEND == "rpi_gpio" and rpi_gpio is not None:
+        rpi_gpio.output(direction_pin, 1 if clockwise else 0)
+        for _ in range(steps):
+            rpi_gpio.output(step_pin, 1)
+            time.sleep(STEPPER_PULSE_HIGH_SECONDS)
+            rpi_gpio.output(step_pin, 0)
+            time.sleep(max(0.0, STEPPER_STEP_PERIOD_SECONDS - STEPPER_PULSE_HIGH_SECONDS))
+        return
+
+    if STEPPER_GPIO_BACKEND != "gpiozero":
+        return
+
+    direction_device = STEPPER_OUTPUTS.get(direction_pin)
+    step_device = STEPPER_OUTPUTS.get(step_pin)
+    if direction_device is None or step_device is None:
+        return
+
+    if clockwise:
+        direction_device.on()
+    else:
+        direction_device.off()
+
     for _ in range(steps):
-        rpi_gpio.output(step_pin, 1)
+        step_device.on()
         time.sleep(STEPPER_PULSE_HIGH_SECONDS)
-        rpi_gpio.output(step_pin, 0)
+        step_device.off()
         time.sleep(max(0.0, STEPPER_STEP_PERIOD_SECONDS - STEPPER_PULSE_HIGH_SECONDS))
 
 
