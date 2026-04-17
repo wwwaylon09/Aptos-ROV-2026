@@ -19,9 +19,9 @@ import gpiozero
 from flask import Flask, Response, render_template_string
 
 try:
-    import RPi.lgpio as rpi_lgpio
+    import RPi.GPIO as rpi_gpio
 except ImportError:
-    rpi_lgpio = None
+    rpi_gpio = None
 
 # ---------------- Control Server Configuration ----------------
 HOST = ""
@@ -111,7 +111,7 @@ HUD_STATE = {
 # ---------------- Control Logic ----------------
 def convert(x):
     x = clamp(x)
-    throttle_multiplier = 0.4
+    throttle_multiplier = 0.35
     max_duty_cycle = 5240 + throttle_multiplier * 1640
     min_duty_cycle = 5240 - throttle_multiplier * 1640
     mapped_value = round((((x + 1) / 2) * (max_duty_cycle - min_duty_cycle)) + min_duty_cycle)
@@ -202,23 +202,23 @@ def apply_thrusters(inputs):
 
 
 def setup_steppers():
-    if rpi_lgpio is None:
+    if rpi_gpio is None:
         print("WARNING: RPi.GPIO is unavailable, claw steppers are disabled")
         return
 
-    rpi_lgpio.setwarnings(False)
-    rpi_lgpio.setmode(rpi_lgpio.BCM)
-    rpi_lgpio.setup(CLAW_ANGLE_DIRECTION_PIN, rpi_lgpio.OUT, initial=rpi_lgpio.LOW)
-    rpi_lgpio.setup(CLAW_ANGLE_STEP_PIN, rpi_lgpio.OUT, initial=rpi_lgpio.LOW)
-    rpi_lgpio.setup(CLAW_ROTATE_DIRECTION_PIN, rpi_lgpio.OUT, initial=rpi_lgpio.LOW)
-    rpi_lgpio.setup(CLAW_ROTATE_STEP_PIN, rpi_lgpio.OUT, initial=rpi_lgpio.LOW)
+    rpi_gpio.setwarnings(False)
+    rpi_gpio.setmode(rpi_gpio.BCM)
+    rpi_gpio.setup(CLAW_ANGLE_DIRECTION_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+    rpi_gpio.setup(CLAW_ANGLE_STEP_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+    rpi_gpio.setup(CLAW_ROTATE_DIRECTION_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
+    rpi_gpio.setup(CLAW_ROTATE_STEP_PIN, rpi_gpio.OUT, initial=rpi_gpio.LOW)
 
 
 def cleanup_steppers():
-    if rpi_lgpio is None:
+    if rpi_gpio is None:
         return
 
-    rpi_lgpio.cleanup((
+    rpi_gpio.cleanup((
         CLAW_ANGLE_DIRECTION_PIN,
         CLAW_ANGLE_STEP_PIN,
         CLAW_ROTATE_DIRECTION_PIN,
@@ -227,14 +227,14 @@ def cleanup_steppers():
 
 
 def pulse_stepper(step_pin, direction_pin, clockwise, steps):
-    if rpi_lgpio is None or steps <= 0:
+    if rpi_gpio is None or steps <= 0:
         return
 
-    rpi_lgpio.output(direction_pin, 1 if clockwise else 0)
+    rpi_gpio.output(direction_pin, 1 if clockwise else 0)
     for _ in range(steps):
-        rpi_lgpio.output(step_pin, 1)
+        rpi_gpio.output(step_pin, 1)
         time.sleep(STEPPER_PULSE_HIGH_SECONDS)
-        rpi_lgpio.output(step_pin, 0)
+        rpi_gpio.output(step_pin, 0)
         time.sleep(max(0.0, STEPPER_STEP_PERIOD_SECONDS - STEPPER_PULSE_HIGH_SECONDS))
 
 
