@@ -111,7 +111,7 @@ HUD_STATE = {
 # ---------------- Control Logic ----------------
 def convert(x):
     x = clamp(x)
-    throttle_multiplier = 0.4
+    throttle_multiplier = 0.35
     max_duty_cycle = 5240 + throttle_multiplier * 1640
     min_duty_cycle = 5240 - throttle_multiplier * 1640
     mapped_value = round((((x + 1) / 2) * (max_duty_cycle - min_duty_cycle)) + min_duty_cycle)
