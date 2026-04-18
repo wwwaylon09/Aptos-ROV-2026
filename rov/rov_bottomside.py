@@ -90,12 +90,15 @@ CLAW_STEPPER_MODE_PINS = (-1, -1, -1)
 CLAW_STEPPER_DRIVER = "DRV8825"
 
 STEPPER_STEP_TYPE = "Full"
-STEPPER_STEP_DELAY_SECONDS = 0.003
-STEPPER_STEPS_PER_COMMAND = 1
+STEPPER_STEP_DELAY_SECONDS = 0.001
+STEPPER_STEPS_PER_BURST = 2
 STEPPER_INIT_DELAY_SECONDS = 0.0
+STEPPER_COMMAND_POLL_SECONDS = 0.0005
 
 CLAW_ANGLE_STEPPER = None
 CLAW_ROTATE_STEPPER = None
+CLAW_ANGLE_CONTROLLER = None
+CLAW_ROTATE_CONTROLLER = None
 
 HUD_LOCK = threading.Lock()
 HUD_STATE = {
@@ -200,10 +203,51 @@ def apply_thrusters(inputs):
     pca.channels[motor_8].duty_cycle = convert(inputs[7])
 
 
+class StepperAxisController:
+    def __init__(self, name, motor):
+        self.name = name
+        self.motor = motor
+        self._lock = threading.Lock()
+        self._command = 0
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def set_command(self, command):
+        with self._lock:
+            self._command = int(command)
+
+    def stop(self):
+        self._stop_event.set()
+        self._thread.join(timeout=1.0)
+        self.set_command(0)
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            with self._lock:
+                command = self._command
+
+            if self.motor is None or command == 0:
+                time.sleep(STEPPER_COMMAND_POLL_SECONDS)
+                continue
+
+            try:
+                self.motor.motor_go(
+                    clockwise=(command > 0),
+                    steptype=STEPPER_STEP_TYPE,
+                    steps=STEPPER_STEPS_PER_BURST,
+                    stepdelay=STEPPER_STEP_DELAY_SECONDS,
+                    verbose=False,
+                    initdelay=STEPPER_INIT_DELAY_SECONDS,
+                )
+            except Exception as exc:
+                print(f"WARNING: Stepper axis '{self.name}' failed ({exc})")
+                self.set_command(0)
+                time.sleep(0.05)
 
 
 def setup_steppers():
-    global CLAW_ANGLE_STEPPER, CLAW_ROTATE_STEPPER
+    global CLAW_ANGLE_STEPPER, CLAW_ROTATE_STEPPER, CLAW_ANGLE_CONTROLLER, CLAW_ROTATE_CONTROLLER
     try:
         CLAW_ANGLE_STEPPER = RpiMotorLib.A4988Nema(
             CLAW_ANGLE_DIRECTION_PIN,
@@ -217,14 +261,24 @@ def setup_steppers():
             CLAW_STEPPER_MODE_PINS,
             CLAW_STEPPER_DRIVER,
         )
+        CLAW_ANGLE_CONTROLLER = StepperAxisController("claw_angle", CLAW_ANGLE_STEPPER)
+        CLAW_ROTATE_CONTROLLER = StepperAxisController("claw_rotate", CLAW_ROTATE_STEPPER)
     except Exception as exc:
         CLAW_ANGLE_STEPPER = None
         CLAW_ROTATE_STEPPER = None
+        CLAW_ANGLE_CONTROLLER = None
+        CLAW_ROTATE_CONTROLLER = None
         print(f"WARNING: Stepper GPIO initialization failed ({exc}); claw steppers are disabled")
 
 
 def cleanup_steppers():
-    global CLAW_ANGLE_STEPPER, CLAW_ROTATE_STEPPER
+    global CLAW_ANGLE_STEPPER, CLAW_ROTATE_STEPPER, CLAW_ANGLE_CONTROLLER, CLAW_ROTATE_CONTROLLER
+    if CLAW_ANGLE_CONTROLLER is not None:
+        CLAW_ANGLE_CONTROLLER.stop()
+    if CLAW_ROTATE_CONTROLLER is not None:
+        CLAW_ROTATE_CONTROLLER.stop()
+    CLAW_ANGLE_CONTROLLER = None
+    CLAW_ROTATE_CONTROLLER = None
     CLAW_ANGLE_STEPPER = None
     CLAW_ROTATE_STEPPER = None
 
@@ -233,25 +287,10 @@ def apply_claw_steppers(inputs):
     angle_command = int(inputs[8])
     rotate_command = int(inputs[9])
 
-    if CLAW_ANGLE_STEPPER is not None and angle_command != 0:
-        CLAW_ANGLE_STEPPER.motor_go(
-            clockwise=(angle_command > 0),
-            steptype=STEPPER_STEP_TYPE,
-            steps=STEPPER_STEPS_PER_COMMAND,
-            stepdelay=STEPPER_STEP_DELAY_SECONDS,
-            verbose=False,
-            initdelay=STEPPER_INIT_DELAY_SECONDS,
-        )
-
-    if CLAW_ROTATE_STEPPER is not None and rotate_command != 0:
-        CLAW_ROTATE_STEPPER.motor_go(
-            clockwise=(rotate_command > 0),
-            steptype=STEPPER_STEP_TYPE,
-            steps=STEPPER_STEPS_PER_COMMAND,
-            stepdelay=STEPPER_STEP_DELAY_SECONDS,
-            verbose=False,
-            initdelay=STEPPER_INIT_DELAY_SECONDS,
-        )
+    if CLAW_ANGLE_CONTROLLER is not None:
+        CLAW_ANGLE_CONTROLLER.set_command(angle_command)
+    if CLAW_ROTATE_CONTROLLER is not None:
+        CLAW_ROTATE_CONTROLLER.set_command(rotate_command)
 
 def read_exact(connection, length):
     buf = b""
