@@ -16,6 +16,7 @@ import adafruit_pca9685
 import board
 import cv2
 import gpiozero
+from RpiMotorLib import RpiMotorLib
 from flask import Flask, Response, render_template_string
 
 # ---------------- Control Server Configuration ----------------
@@ -85,12 +86,16 @@ CLAW_ANGLE_STEP_PIN = 21
 CLAW_ANGLE_DIRECTION_PIN = 20
 CLAW_ROTATE_STEP_PIN = 26
 CLAW_ROTATE_DIRECTION_PIN = 19
+CLAW_STEPPER_MODE_PINS = (-1, -1, -1)
+CLAW_STEPPER_DRIVER = "DRV8825"
 
-STEPPER_PULSE_HIGH_SECONDS = 0.001
-STEPPER_STEP_PERIOD_SECONDS = 0.003
+STEPPER_STEP_TYPE = "Full"
+STEPPER_STEP_DELAY_SECONDS = 0.003
 STEPPER_STEPS_PER_COMMAND = 1
+STEPPER_INIT_DELAY_SECONDS = 0.0
 
-STEPPER_OUTPUTS = {}
+CLAW_ANGLE_STEPPER = None
+CLAW_ROTATE_STEPPER = None
 
 HUD_LOCK = threading.Lock()
 HUD_STATE = {
@@ -198,58 +203,55 @@ def apply_thrusters(inputs):
 
 
 def setup_steppers():
+    global CLAW_ANGLE_STEPPER, CLAW_ROTATE_STEPPER
     try:
-        # Use gpiozero as the only GPIO backend. LED is a thin, reliable OutputDevice
-        # wrapper and has been verified in standalone stepper tests on this hardware.
-        STEPPER_OUTPUTS[CLAW_ANGLE_DIRECTION_PIN] = gpiozero.LED(CLAW_ANGLE_DIRECTION_PIN)
-        STEPPER_OUTPUTS[CLAW_ANGLE_STEP_PIN] = gpiozero.LED(CLAW_ANGLE_STEP_PIN)
-        STEPPER_OUTPUTS[CLAW_ROTATE_DIRECTION_PIN] = gpiozero.LED(CLAW_ROTATE_DIRECTION_PIN)
-        STEPPER_OUTPUTS[CLAW_ROTATE_STEP_PIN] = gpiozero.LED(CLAW_ROTATE_STEP_PIN)
+        CLAW_ANGLE_STEPPER = RpiMotorLib.A4988Nema(
+            CLAW_ANGLE_DIRECTION_PIN,
+            CLAW_ANGLE_STEP_PIN,
+            CLAW_STEPPER_MODE_PINS,
+            CLAW_STEPPER_DRIVER,
+        )
+        CLAW_ROTATE_STEPPER = RpiMotorLib.A4988Nema(
+            CLAW_ROTATE_DIRECTION_PIN,
+            CLAW_ROTATE_STEP_PIN,
+            CLAW_STEPPER_MODE_PINS,
+            CLAW_STEPPER_DRIVER,
+        )
     except Exception as exc:
-        STEPPER_OUTPUTS.clear()
+        CLAW_ANGLE_STEPPER = None
+        CLAW_ROTATE_STEPPER = None
         print(f"WARNING: Stepper GPIO initialization failed ({exc}); claw steppers are disabled")
 
 
 def cleanup_steppers():
-    for device in STEPPER_OUTPUTS.values():
-        device.close()
-    STEPPER_OUTPUTS.clear()
-
-
-def pulse_stepper(step_pin, direction_pin, clockwise, steps):
-    if steps <= 0:
-        return
-
-    direction_device = STEPPER_OUTPUTS.get(direction_pin)
-    step_device = STEPPER_OUTPUTS.get(step_pin)
-    if direction_device is None or step_device is None:
-        return
-
-    if clockwise:
-        direction_device.on()
-    else:
-        direction_device.off()
-
-    for _ in range(steps):
-        step_device.on()
-        time.sleep(STEPPER_PULSE_HIGH_SECONDS)
-        step_device.off()
-        time.sleep(max(0.0, STEPPER_STEP_PERIOD_SECONDS - STEPPER_PULSE_HIGH_SECONDS))
+    global CLAW_ANGLE_STEPPER, CLAW_ROTATE_STEPPER
+    CLAW_ANGLE_STEPPER = None
+    CLAW_ROTATE_STEPPER = None
 
 
 def apply_claw_steppers(inputs):
     angle_command = int(inputs[8])
     rotate_command = int(inputs[9])
 
-    if angle_command > 0:
-        pulse_stepper(CLAW_ANGLE_STEP_PIN, CLAW_ANGLE_DIRECTION_PIN, clockwise=True, steps=STEPPER_STEPS_PER_COMMAND)
-    elif angle_command < 0:
-        pulse_stepper(CLAW_ANGLE_STEP_PIN, CLAW_ANGLE_DIRECTION_PIN, clockwise=False, steps=STEPPER_STEPS_PER_COMMAND)
+    if CLAW_ANGLE_STEPPER is not None and angle_command != 0:
+        CLAW_ANGLE_STEPPER.motor_go(
+            clockwise=(angle_command > 0),
+            steptype=STEPPER_STEP_TYPE,
+            steps=STEPPER_STEPS_PER_COMMAND,
+            stepdelay=STEPPER_STEP_DELAY_SECONDS,
+            verbose=False,
+            initdelay=STEPPER_INIT_DELAY_SECONDS,
+        )
 
-    if rotate_command > 0:
-        pulse_stepper(CLAW_ROTATE_STEP_PIN, CLAW_ROTATE_DIRECTION_PIN, clockwise=True, steps=STEPPER_STEPS_PER_COMMAND)
-    elif rotate_command < 0:
-        pulse_stepper(CLAW_ROTATE_STEP_PIN, CLAW_ROTATE_DIRECTION_PIN, clockwise=False, steps=STEPPER_STEPS_PER_COMMAND)
+    if CLAW_ROTATE_STEPPER is not None and rotate_command != 0:
+        CLAW_ROTATE_STEPPER.motor_go(
+            clockwise=(rotate_command > 0),
+            steptype=STEPPER_STEP_TYPE,
+            steps=STEPPER_STEPS_PER_COMMAND,
+            stepdelay=STEPPER_STEP_DELAY_SECONDS,
+            verbose=False,
+            initdelay=STEPPER_INIT_DELAY_SECONDS,
+        )
 
 def read_exact(connection, length):
     buf = b""
