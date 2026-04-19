@@ -95,8 +95,6 @@ CLAW_ROTATE_STEP_DELAY_SECONDS = 0.003
 STEPPER_STEPS_PER_BURST = 2
 STEPPER_INIT_DELAY_SECONDS = 0.0
 STEPPER_COMMAND_POLL_SECONDS = 0.0005
-STEPPER_RAMP_START_FACTOR = 2.0
-STEPPER_RAMP_STEP_DELTA_SECONDS = 0.00015
 
 CLAW_ANGLE_STEPPER = None
 CLAW_ROTATE_STEPPER = None
@@ -211,9 +209,6 @@ class StepperAxisController:
         self.name = name
         self.motor = motor
         self.step_delay_seconds = float(step_delay_seconds)
-        self.ramp_start_delay_seconds = self.step_delay_seconds * STEPPER_RAMP_START_FACTOR
-        self.current_step_delay_seconds = self.ramp_start_delay_seconds
-        self.previous_command = 0
         self._lock = threading.Lock()
         self._command = 0
         self._stop_event = threading.Event()
@@ -235,29 +230,18 @@ class StepperAxisController:
                 command = self._command
 
             if self.motor is None or command == 0:
-                self.current_step_delay_seconds = self.ramp_start_delay_seconds
-                self.previous_command = 0
                 time.sleep(STEPPER_COMMAND_POLL_SECONDS)
                 continue
-
-            if self.previous_command == 0 or ((self.previous_command > 0) != (command > 0)):
-                self.current_step_delay_seconds = self.ramp_start_delay_seconds
-
-            self.current_step_delay_seconds = max(
-                self.step_delay_seconds,
-                self.current_step_delay_seconds - STEPPER_RAMP_STEP_DELTA_SECONDS,
-            )
 
             try:
                 self.motor.motor_go(
                     clockwise=(command > 0),
                     steptype=STEPPER_STEP_TYPE,
                     steps=STEPPER_STEPS_PER_BURST,
-                    stepdelay=self.current_step_delay_seconds,
+                    stepdelay=self.step_delay_seconds,
                     verbose=False,
                     initdelay=STEPPER_INIT_DELAY_SECONDS,
                 )
-                self.previous_command = command
             except Exception as exc:
                 print(f"WARNING: Stepper axis '{self.name}' failed ({exc})")
                 self.set_command(0)
