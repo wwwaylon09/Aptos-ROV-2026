@@ -112,6 +112,9 @@ HUD_STATE = {
     "client_connected": False,
 }
 
+STABILIZATION_INPUT_CURVE = 0.5
+STABILIZATION_AUTHORITY = 0.35
+
 
 # ---------------- Control Logic ----------------
 def convert(x):
@@ -135,22 +138,23 @@ def calculate_orientation_degrees():
     return math.degrees(pitch_rad), math.degrees(roll_rad), pitch_rad, roll_rad
 
 
-def lerp(a, b, t):
-    return a + (b - a) * t
-
-
 def clamp(value, low=-1.0, high=1.0):
     return max(low, min(high, value))
 
 
+def shape_stabilization_input(mpu_input):
+    mpu_input = clamp(mpu_input)
+    if mpu_input < 0:
+        return -((-mpu_input) ** STABILIZATION_INPUT_CURVE)
+    return mpu_input ** STABILIZATION_INPUT_CURVE
+
 
 def merge_inputs(joystick_input, mpu_input):
-    if mpu_input < 0:
-        mpu_input = -((-mpu_input) ** 0.5)
-    else:
-        mpu_input **= 0.5
+    joystick_input = clamp(joystick_input)
+    shaped_mpu = shape_stabilization_input(mpu_input)
 
-    return lerp(mpu_input, joystick_input, math.fabs(joystick_input))
+    pilot_authority = 1.0 - STABILIZATION_AUTHORITY
+    return clamp((joystick_input * pilot_authority) + (shaped_mpu * STABILIZATION_AUTHORITY))
 
 
 def set_neutral_thrusters():
