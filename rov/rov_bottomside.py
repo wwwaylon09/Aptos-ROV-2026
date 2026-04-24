@@ -117,9 +117,6 @@ HUD_STATE = {
 STABILIZATION_INPUT_CURVE = 0.5
 STABILIZATION_AUTHORITY = 0.35
 
-GYRO_ZERO_PITCH_RAD = 0.0
-GYRO_ZERO_ROLL_RAD = 0.0
-
 
 # ---------------- Control Logic ----------------
 def convert(x):
@@ -357,14 +354,8 @@ def normalize_input_target_deg(value):
         return 0.0
 
 
-def apply_gyro_reset(raw_pitch_rad, raw_roll_rad):
-    global GYRO_ZERO_PITCH_RAD, GYRO_ZERO_ROLL_RAD
-    GYRO_ZERO_PITCH_RAD = float(raw_pitch_rad)
-    GYRO_ZERO_ROLL_RAD = float(raw_roll_rad)
-
-
 def get_zeroed_orientation(raw_pitch_rad, raw_roll_rad):
-    return raw_pitch_rad - GYRO_ZERO_PITCH_RAD, raw_roll_rad - GYRO_ZERO_ROLL_RAD
+    return raw_pitch_rad, raw_roll_rad
 
 
 def setup_server_socket():
@@ -422,10 +413,10 @@ def run_control_server(stop_event):
 
                     target_pitch_deg = normalize_input_target_deg(inputs[11])
                     target_roll_deg = normalize_input_target_deg(inputs[12])
-                    gyro_reset_requested = bool(inputs[13])
-
-                    if gyro_reset_requested:
-                        apply_gyro_reset(raw_pitch_rad, raw_roll_rad)
+                    target_reset_requested = bool(inputs[13])
+                    if target_reset_requested:
+                        target_pitch_deg = 0.0
+                        target_roll_deg = 0.0
 
                     zeroed_pitch_rad, zeroed_roll_rad = get_zeroed_orientation(raw_pitch_rad, raw_roll_rad)
                     pitch_deg = math.degrees(zeroed_pitch_rad)
