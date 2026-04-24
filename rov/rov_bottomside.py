@@ -109,11 +109,16 @@ HUD_STATE = {
     "stabilization_enabled": False,
     "mpu_pitch_deg": 0.0,
     "mpu_roll_deg": 0.0,
+    "target_pitch_deg": 0.0,
+    "target_roll_deg": 0.0,
     "client_connected": False,
 }
 
 STABILIZATION_INPUT_CURVE = 0.5
 STABILIZATION_AUTHORITY = 0.35
+
+GYRO_ZERO_PITCH_RAD = 0.0
+GYRO_ZERO_ROLL_RAD = 0.0
 
 
 # ---------------- Control Logic ----------------
@@ -174,7 +179,7 @@ def set_client_connected(connected):
         HUD_STATE["client_connected"] = bool(connected)
 
 
-def update_hud_state(inputs, pitch_deg, roll_deg):
+def update_hud_state(inputs, pitch_deg, roll_deg, target_pitch_deg, target_roll_deg):
     with HUD_LOCK:
         HUD_STATE["thrusters"] = [float(value) for value in inputs[:8]]
         HUD_STATE["claw_angle_command"] = float(inputs[8])
@@ -182,6 +187,8 @@ def update_hud_state(inputs, pitch_deg, roll_deg):
         HUD_STATE["stabilization_enabled"] = bool(inputs[10])
         HUD_STATE["mpu_pitch_deg"] = float(pitch_deg)
         HUD_STATE["mpu_roll_deg"] = float(roll_deg)
+        HUD_STATE["target_pitch_deg"] = float(target_pitch_deg)
+        HUD_STATE["target_roll_deg"] = float(target_roll_deg)
 
 
 def get_hud_state():
@@ -193,6 +200,8 @@ def get_hud_state():
             "stabilization_enabled": HUD_STATE["stabilization_enabled"],
             "mpu_pitch_deg": round(HUD_STATE["mpu_pitch_deg"], 2),
             "mpu_roll_deg": round(HUD_STATE["mpu_roll_deg"], 2),
+            "target_pitch_deg": round(HUD_STATE["target_pitch_deg"], 2),
+            "target_roll_deg": round(HUD_STATE["target_roll_deg"], 2),
             "client_connected": HUD_STATE["client_connected"],
         }
 
@@ -333,10 +342,29 @@ def receive_frame(connection):
         return None
 
     decoded = json.loads(payload.decode("utf-8"))
-    if not isinstance(decoded, list) or len(decoded) != 11:
-        raise ValueError("Expected control payload as list[11]")
+    if not isinstance(decoded, list) or len(decoded) != 14:
+        raise ValueError("Expected control payload as list[14]")
 
     return decoded
+
+
+
+
+def normalize_input_target_deg(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def apply_gyro_reset(raw_pitch_rad, raw_roll_rad):
+    global GYRO_ZERO_PITCH_RAD, GYRO_ZERO_ROLL_RAD
+    GYRO_ZERO_PITCH_RAD = float(raw_pitch_rad)
+    GYRO_ZERO_ROLL_RAD = float(raw_roll_rad)
+
+
+def get_zeroed_orientation(raw_pitch_rad, raw_roll_rad):
+    return raw_pitch_rad - GYRO_ZERO_PITCH_RAD, raw_roll_rad - GYRO_ZERO_ROLL_RAD
 
 
 def setup_server_socket():
@@ -387,30 +415,43 @@ def run_control_server(stop_event):
                     last_packet_time = now
 
                     try:
-                        pitch_deg, roll_deg, pitch_rad, roll_rad = calculate_orientation_degrees()
+                        _, _, raw_pitch_rad, raw_roll_rad = calculate_orientation_degrees()
                     except OSError as exc:
                         print(f"MPU read failed: {exc}")
-                        pitch_deg, roll_deg, pitch_rad, roll_rad = 0.0, 0.0, 0.0, 0.0
+                        _, _, raw_pitch_rad, raw_roll_rad = 0.0, 0.0, 0.0, 0.0
+
+                    target_pitch_deg = normalize_input_target_deg(inputs[11])
+                    target_roll_deg = normalize_input_target_deg(inputs[12])
+                    gyro_reset_requested = bool(inputs[13])
+
+                    if gyro_reset_requested:
+                        apply_gyro_reset(raw_pitch_rad, raw_roll_rad)
+
+                    zeroed_pitch_rad, zeroed_roll_rad = get_zeroed_orientation(raw_pitch_rad, raw_roll_rad)
+                    pitch_deg = math.degrees(zeroed_pitch_rad)
+                    roll_deg = math.degrees(zeroed_roll_rad)
 
                     if inputs[10]:
-                        pitch = pitch_rad / math.pi
-                        roll = roll_rad / math.pi
+                        target_pitch_rad = math.radians(target_pitch_deg)
+                        target_roll_rad = math.radians(target_roll_deg)
+                        pitch_error = (zeroed_pitch_rad - target_pitch_rad) / math.pi
+                        roll_error = (zeroed_roll_rad - target_roll_rad) / math.pi
 
-                        inputs[0] = merge_inputs(inputs[0], -roll - pitch)
-                        inputs[1] = merge_inputs(inputs[1], roll - pitch)
-                        inputs[2] = merge_inputs(inputs[2], roll + pitch)
-                        inputs[3] = merge_inputs(inputs[3], -roll + pitch)
-                        inputs[4] = merge_inputs(inputs[4], -roll + pitch)
-                        inputs[5] = merge_inputs(inputs[5], roll + pitch)
-                        inputs[6] = merge_inputs(inputs[6], roll - pitch)
-                        inputs[7] = merge_inputs(inputs[7], -roll - pitch)
+                        inputs[0] = merge_inputs(inputs[0], -roll_error - pitch_error)
+                        inputs[1] = merge_inputs(inputs[1], roll_error - pitch_error)
+                        inputs[2] = merge_inputs(inputs[2], roll_error + pitch_error)
+                        inputs[3] = merge_inputs(inputs[3], -roll_error + pitch_error)
+                        inputs[4] = merge_inputs(inputs[4], -roll_error + pitch_error)
+                        inputs[5] = merge_inputs(inputs[5], roll_error + pitch_error)
+                        inputs[6] = merge_inputs(inputs[6], roll_error - pitch_error)
+                        inputs[7] = merge_inputs(inputs[7], -roll_error - pitch_error)
 
                     for i in range(8):
                         inputs[i] = clamp(inputs[i])
 
                     apply_thrusters(inputs)
                     apply_claw_steppers(inputs)
-                    update_hud_state(inputs, pitch_deg, roll_deg)
+                    update_hud_state(inputs, pitch_deg, roll_deg, target_pitch_deg, target_roll_deg)
 
             except OSError as exc:
                 print(f"Control connection error: {exc}")
@@ -634,6 +675,8 @@ def index():
             document.getElementById("hud-claw-rotation").textContent = formatInput(hud.claw_rotation_command);
             document.getElementById("hud-mpu-pitch").textContent = formatInput(hud.mpu_pitch_deg) + "°";
             document.getElementById("hud-mpu-roll").textContent = formatInput(hud.mpu_roll_deg) + "°";
+            document.getElementById("hud-target-pitch").textContent = formatInput(hud.target_pitch_deg) + "°";
+            document.getElementById("hud-target-roll").textContent = formatInput(hud.target_roll_deg) + "°";
 
             const thrusters = Array.isArray(hud.thrusters) ? hud.thrusters : [];
             for (let i = 0; i < 8; i++) {{
@@ -681,6 +724,8 @@ def index():
                     <div class="hud-row"><span class="hud-label">Claw rotate cmd</span><span class="hud-value" id="hud-claw-rotation">0.00</span></div>
                     <div class="hud-row"><span class="hud-label">MPU pitch</span><span class="hud-value" id="hud-mpu-pitch">0.00°</span></div>
                     <div class="hud-row"><span class="hud-label">MPU roll</span><span class="hud-value" id="hud-mpu-roll">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">Target pitch</span><span class="hud-value" id="hud-target-pitch">0.00°</span></div>
+                    <div class="hud-row"><span class="hud-label">Target roll</span><span class="hud-value" id="hud-target-roll">0.00°</span></div>
                     <div>
                         <div class="hud-label" style="margin-bottom: 6px;">Thruster power</div>
                         <ul class="thruster-list">
