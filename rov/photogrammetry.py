@@ -217,7 +217,7 @@ def parse_args() -> tuple[CaptureConfig, MetashapeConfig]:
     )
     parser.add_argument("--calculate-vertex-colors", action=argparse.BooleanOptionalAction, default=False)
 
-    parser.add_argument("--build-texture", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--build-texture", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--texture-size", type=int, default=4096)
     parser.add_argument("--texture-count", type=int, default=1)
     parser.add_argument(
