@@ -11,8 +11,6 @@ SEND_HZ = 50
 DEADBAND = 0.1
 RECONNECT_DELAY_SECONDS = 1.0
 SOCKET_TIMEOUT_SECONDS = 2.0
-TARGET_ADJUST_RATE_DEG_PER_SEC = 30.0
-TARGET_ANGLE_LIMIT_DEG = 60.0
 
 
 PS3_LAYOUT = {
@@ -25,7 +23,6 @@ PS3_LAYOUT = {
     "roll_positive": 5,
     "roll_negative": 7,
     "stabilization_toggle": 3,
-    "gyro_reset": 0,
 }
 
 # Xbox One maps D-pad to the first hat on most drivers instead of button indices.
@@ -39,7 +36,6 @@ XBOX_ONE_LAYOUT = {
     "roll_positive": "dpad_right",
     "roll_negative": "dpad_left",
     "stabilization_toggle": 7,
-    "gyro_reset": 6,
 }
 
 
@@ -69,13 +65,9 @@ enable_stabilization = False
 
 # Input array to store joystick inputs
 # [0:8] thrusters, [8] claw angle step command, [9] claw rotate step command, [10] stabilization
-# [11] target pitch deg, [12] target roll deg, [13] gyro reset request
-control_input = [0] * 14
+control_input = [0] * 11
 control_input[10] = enable_stabilization
 print(control_input)
-
-target_pitch_deg = 0.0
-target_roll_deg = 0.0
 
 
 def clamp(value):
@@ -127,9 +119,8 @@ try:
             claw_angle_command = 0
             claw_rotate_command = 0
 
-            # Need these values outside of the loop to prevent them from being falsely set by other buttons
+            # Need this value outside of the loop to prevent it from being falsely set by other buttons
             stabilization_pressed = False
-            gyro_reset_pressed = False
 
             dpad_x = 0
             dpad_y = 0
@@ -173,8 +164,6 @@ try:
                         roll = -1
                     if control_active("stabilization_toggle", button):
                         stabilization_pressed = True
-                    if control_active("gyro_reset", button):
-                        gyro_reset_pressed = True
 
             if control_active("pitch_positive"):
                 pitch = 1
@@ -201,23 +190,6 @@ try:
 
             # Ensure latest stabilization value is always transmitted
             control_input[10] = enable_stabilization
-
-            frame_dt = 1.0 / SEND_HZ
-            if enable_stabilization:
-                target_pitch_deg += pitch * TARGET_ADJUST_RATE_DEG_PER_SEC * frame_dt
-                target_roll_deg += roll * TARGET_ADJUST_RATE_DEG_PER_SEC * frame_dt
-                target_pitch_deg = max(-TARGET_ANGLE_LIMIT_DEG, min(TARGET_ANGLE_LIMIT_DEG, target_pitch_deg))
-                target_roll_deg = max(-TARGET_ANGLE_LIMIT_DEG, min(TARGET_ANGLE_LIMIT_DEG, target_roll_deg))
-                pitch = 0
-                roll = 0
-
-            if gyro_reset_pressed:
-                target_pitch_deg = 0.0
-                target_roll_deg = 0.0
-
-            control_input[11] = round(target_pitch_deg, 2)
-            control_input[12] = round(target_roll_deg, 2)
-            control_input[13] = bool(gyro_reset_pressed)
 
             # Check joystick axes
             yaw = joystick.get_axis(2)
