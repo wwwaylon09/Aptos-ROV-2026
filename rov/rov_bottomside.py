@@ -16,6 +16,7 @@ import adafruit_pca9685
 import board
 import cv2
 import gpiozero
+import numpy as np
 from RpiMotorLib import RpiMotorLib
 from flask import Flask, Response, render_template_string
 
@@ -116,6 +117,25 @@ HUD_STATE = {
 
 STABILIZATION_INPUT_CURVE = 0.5
 STABILIZATION_AUTHORITY = 0.5
+Kp_roll = 2.2
+Kd_roll = 0.35
+Kp_pitch = 2.2
+Kd_pitch = 0.35
+
+THRUSTER_ALLOCATION_MATRIX = np.array(
+    [
+        [-1.0, +1.0, +1.0, +1.0, -1.0, +1.0],
+        [-1.0, -1.0, +1.0, -1.0, -1.0, -1.0],
+        [-1.0, +1.0, -1.0, -1.0, +1.0, +1.0],
+        [-1.0, -1.0, -1.0, +1.0, +1.0, -1.0],
+        [+1.0, +1.0, +1.0, +1.0, +1.0, -1.0],
+        [+1.0, -1.0, +1.0, -1.0, +1.0, +1.0],
+        [+1.0, +1.0, -1.0, -1.0, -1.0, -1.0],
+        [+1.0, -1.0, -1.0, +1.0, -1.0, +1.0],
+    ],
+    dtype=float,
+)
+THRUSTER_ALLOCATION_PINV = np.linalg.pinv(THRUSTER_ALLOCATION_MATRIX)
 
 
 # ---------------- Control Logic ----------------
@@ -157,6 +177,83 @@ def merge_inputs(joystick_input, mpu_input):
 
     pilot_authority = 1.0 - STABILIZATION_AUTHORITY
     return clamp((joystick_input * pilot_authority) + (shaped_mpu * STABILIZATION_AUTHORITY))
+
+
+def decode_pilot_axis_commands(thruster_inputs):
+    thruster_vector = np.array([clamp(value) for value in thruster_inputs[:8]], dtype=float)
+    axis_vector = THRUSTER_ALLOCATION_PINV @ thruster_vector
+    return {
+        "surge": float(axis_vector[0]),
+        "sway": float(axis_vector[1]),
+        "heave": float(axis_vector[2]),
+        "roll": float(axis_vector[3]),
+        "pitch": float(axis_vector[4]),
+        "yaw": float(axis_vector[5]),
+    }
+
+
+def compute_attitude_correction(
+    enabled,
+    target_pitch_rad,
+    target_roll_rad,
+    measured_pitch_rad,
+    measured_roll_rad,
+    dt_seconds,
+    attitude_state,
+):
+    if not enabled:
+        attitude_state["prev_pitch_error"] = 0.0
+        attitude_state["prev_roll_error"] = 0.0
+        attitude_state["prev_pitch_measurement"] = float(measured_pitch_rad)
+        attitude_state["prev_roll_measurement"] = float(measured_roll_rad)
+        return 0.0, 0.0
+
+    safe_dt = max(float(dt_seconds), 1e-4)
+    pitch_error = float(target_pitch_rad - measured_pitch_rad)
+    roll_error = float(target_roll_rad - measured_roll_rad)
+
+    pitch_rate = (float(measured_pitch_rad) - attitude_state["prev_pitch_measurement"]) / safe_dt
+    roll_rate = (float(measured_roll_rad) - attitude_state["prev_roll_measurement"]) / safe_dt
+
+    pitch_torque = (Kp_pitch * pitch_error) - (Kd_pitch * pitch_rate)
+    roll_torque = (Kp_roll * roll_error) - (Kd_roll * roll_rate)
+
+    attitude_state["prev_pitch_error"] = pitch_error
+    attitude_state["prev_roll_error"] = roll_error
+    attitude_state["prev_pitch_measurement"] = float(measured_pitch_rad)
+    attitude_state["prev_roll_measurement"] = float(measured_roll_rad)
+
+    return clamp(pitch_torque), clamp(roll_torque)
+
+
+def allocate_thrusters(axis_commands):
+    axis_vector = np.array(
+        [
+            axis_commands["surge"],
+            axis_commands["sway"],
+            axis_commands["heave"],
+            axis_commands["roll"],
+            axis_commands["pitch"],
+            axis_commands["yaw"],
+        ],
+        dtype=float,
+    )
+    thruster_vector = THRUSTER_ALLOCATION_MATRIX @ axis_vector
+
+    clipped = []
+    clipped_indices = []
+    for index, value in enumerate(thruster_vector):
+        clamped_value = clamp(float(value))
+        clipped.append(clamped_value)
+        if abs(clamped_value - float(value)) > 1e-6:
+            clipped_indices.append(
+                f"T{index + 1}:raw={float(value):+.3f}->clamped={clamped_value:+.3f}"
+            )
+
+    if clipped_indices:
+        print("Thruster outputs clipped:", ", ".join(clipped_indices))
+
+    return clipped
 
 
 def set_neutral_thrusters():
@@ -372,6 +469,12 @@ def run_control_server(stop_event):
     set_neutral_thrusters()
     print("Powering up ESCs")
     relay_pin.on()
+    attitude_state = {
+        "prev_pitch_error": 0.0,
+        "prev_roll_error": 0.0,
+        "prev_pitch_measurement": 0.0,
+        "prev_roll_measurement": 0.0,
+    }
 
     server_socket = setup_server_socket()
 
@@ -386,6 +489,7 @@ def run_control_server(stop_event):
             print(f"Control client connected: {client_address}")
             set_client_connected(True)
             last_packet_time = time.monotonic()
+            previous_cycle_time = last_packet_time
 
             try:
                 while not stop_event.is_set():
@@ -404,6 +508,8 @@ def run_control_server(stop_event):
                         break
 
                     last_packet_time = now
+                    dt_seconds = now - previous_cycle_time
+                    previous_cycle_time = now
 
                     try:
                         _, _, raw_pitch_rad, raw_roll_rad = calculate_orientation_degrees()
@@ -421,24 +527,28 @@ def run_control_server(stop_event):
                     zeroed_pitch_rad, zeroed_roll_rad = get_zeroed_orientation(raw_pitch_rad, raw_roll_rad)
                     pitch_deg = math.degrees(zeroed_pitch_rad)
                     roll_deg = math.degrees(zeroed_roll_rad)
+                    target_pitch_rad = math.radians(target_pitch_deg)
+                    target_roll_rad = math.radians(target_roll_deg)
+                    pilot_axes = decode_pilot_axis_commands(inputs[:8])
+                    pitch_correction, roll_correction = compute_attitude_correction(
+                        enabled=bool(inputs[10]),
+                        target_pitch_rad=target_pitch_rad,
+                        target_roll_rad=target_roll_rad,
+                        measured_pitch_rad=zeroed_pitch_rad,
+                        measured_roll_rad=zeroed_roll_rad,
+                        dt_seconds=dt_seconds,
+                        attitude_state=attitude_state,
+                    )
 
-                    if inputs[10]:
-                        target_pitch_rad = math.radians(target_pitch_deg)
-                        target_roll_rad = math.radians(target_roll_deg)
-                        pitch_error = (zeroed_pitch_rad - target_pitch_rad) / math.pi
-                        roll_error = (zeroed_roll_rad - target_roll_rad) / math.pi
-
-                        inputs[0] = merge_inputs(inputs[0], -roll_error + pitch_error)
-                        inputs[1] = merge_inputs(inputs[1], roll_error + pitch_error)
-                        inputs[2] = merge_inputs(inputs[2], roll_error - pitch_error)
-                        inputs[3] = merge_inputs(inputs[3], -roll_error - pitch_error)
-                        inputs[4] = merge_inputs(inputs[4], -roll_error - pitch_error)
-                        inputs[5] = merge_inputs(inputs[5], roll_error - pitch_error)
-                        inputs[6] = merge_inputs(inputs[6], roll_error + pitch_error)
-                        inputs[7] = merge_inputs(inputs[7], -roll_error + pitch_error)
-
-                    for i in range(8):
-                        inputs[i] = clamp(inputs[i])
+                    axis_commands = {
+                        "surge": pilot_axes["surge"],
+                        "sway": pilot_axes["sway"],
+                        "heave": pilot_axes["heave"],
+                        "roll": pilot_axes["roll"] + roll_correction,
+                        "pitch": pilot_axes["pitch"] + pitch_correction,
+                        "yaw": pilot_axes["yaw"],
+                    }
+                    inputs[:8] = allocate_thrusters(axis_commands)
 
                     apply_thrusters(inputs)
                     apply_claw_steppers(inputs)
