@@ -16,7 +16,6 @@ import adafruit_pca9685
 import board
 import cv2
 import gpiozero
-import numpy as np
 from RpiMotorLib import RpiMotorLib
 from flask import Flask, Response, render_template_string
 
@@ -110,32 +109,8 @@ HUD_STATE = {
     "stabilization_enabled": False,
     "mpu_pitch_deg": 0.0,
     "mpu_roll_deg": 0.0,
-    "target_pitch_deg": 0.0,
-    "target_roll_deg": 0.0,
     "client_connected": False,
 }
-
-STABILIZATION_INPUT_CURVE = 0.5
-STABILIZATION_AUTHORITY = 0.5
-Kp_roll = 2.2
-Kd_roll = 0.35
-Kp_pitch = 2.2
-Kd_pitch = 0.35
-
-THRUSTER_ALLOCATION_MATRIX = np.array(
-    [
-        [-1.0, +1.0, +1.0, +1.0, -1.0, +1.0],
-        [-1.0, -1.0, +1.0, -1.0, -1.0, -1.0],
-        [-1.0, +1.0, -1.0, -1.0, +1.0, +1.0],
-        [-1.0, -1.0, -1.0, +1.0, +1.0, -1.0],
-        [+1.0, +1.0, +1.0, +1.0, +1.0, -1.0],
-        [+1.0, -1.0, +1.0, -1.0, +1.0, +1.0],
-        [+1.0, +1.0, -1.0, -1.0, -1.0, -1.0],
-        [+1.0, -1.0, -1.0, +1.0, -1.0, +1.0],
-    ],
-    dtype=float,
-)
-THRUSTER_ALLOCATION_PINV = np.linalg.pinv(THRUSTER_ALLOCATION_MATRIX)
 
 
 # ---------------- Control Logic ----------------
@@ -152,7 +127,7 @@ def calculate_orientation():
     accel_x, accel_y, accel_z = mpu.acceleration
     pitch = math.atan2(accel_x, math.sqrt(accel_y**2 + accel_z**2))
     roll = math.atan2(-accel_y, accel_z)
-    return -pitch, -roll
+    return pitch, roll
 
 
 def calculate_orientation_degrees():
@@ -160,100 +135,22 @@ def calculate_orientation_degrees():
     return math.degrees(pitch_rad), math.degrees(roll_rad), pitch_rad, roll_rad
 
 
+def lerp(a, b, t):
+    return a + (b - a) * t
+
+
 def clamp(value, low=-1.0, high=1.0):
     return max(low, min(high, value))
 
 
-def shape_stabilization_input(mpu_input):
-    mpu_input = clamp(mpu_input)
-    if mpu_input < 0:
-        return -((-mpu_input) ** STABILIZATION_INPUT_CURVE)
-    return mpu_input ** STABILIZATION_INPUT_CURVE
-
 
 def merge_inputs(joystick_input, mpu_input):
-    joystick_input = clamp(joystick_input)
-    shaped_mpu = shape_stabilization_input(mpu_input)
+    if mpu_input < 0:
+        mpu_input = -((-mpu_input) ** 0.5)
+    else:
+        mpu_input **= 0.5
 
-    pilot_authority = 1.0 - STABILIZATION_AUTHORITY
-    return clamp((joystick_input * pilot_authority) + (shaped_mpu * STABILIZATION_AUTHORITY))
-
-
-def decode_pilot_axis_commands(thruster_inputs):
-    thruster_vector = np.array([clamp(value) for value in thruster_inputs[:8]], dtype=float)
-    axis_vector = THRUSTER_ALLOCATION_PINV @ thruster_vector
-    return {
-        "surge": float(axis_vector[0]),
-        "sway": float(axis_vector[1]),
-        "heave": float(axis_vector[2]),
-        "roll": float(axis_vector[3]),
-        "pitch": float(axis_vector[4]),
-        "yaw": float(axis_vector[5]),
-    }
-
-
-def compute_attitude_correction(
-    enabled,
-    target_pitch_rad,
-    target_roll_rad,
-    measured_pitch_rad,
-    measured_roll_rad,
-    dt_seconds,
-    attitude_state,
-):
-    if not enabled:
-        attitude_state["prev_pitch_error"] = 0.0
-        attitude_state["prev_roll_error"] = 0.0
-        attitude_state["prev_pitch_measurement"] = float(measured_pitch_rad)
-        attitude_state["prev_roll_measurement"] = float(measured_roll_rad)
-        return 0.0, 0.0
-
-    safe_dt = max(float(dt_seconds), 1e-4)
-    pitch_error = float(target_pitch_rad - measured_pitch_rad)
-    roll_error = float(target_roll_rad - measured_roll_rad)
-
-    pitch_rate = (float(measured_pitch_rad) - attitude_state["prev_pitch_measurement"]) / safe_dt
-    roll_rate = (float(measured_roll_rad) - attitude_state["prev_roll_measurement"]) / safe_dt
-
-    pitch_torque = (Kp_pitch * pitch_error) - (Kd_pitch * pitch_rate)
-    roll_torque = (Kp_roll * roll_error) - (Kd_roll * roll_rate)
-
-    attitude_state["prev_pitch_error"] = pitch_error
-    attitude_state["prev_roll_error"] = roll_error
-    attitude_state["prev_pitch_measurement"] = float(measured_pitch_rad)
-    attitude_state["prev_roll_measurement"] = float(measured_roll_rad)
-
-    return clamp(pitch_torque), clamp(roll_torque)
-
-
-def allocate_thrusters(axis_commands):
-    axis_vector = np.array(
-        [
-            axis_commands["surge"],
-            axis_commands["sway"],
-            axis_commands["heave"],
-            axis_commands["roll"],
-            axis_commands["pitch"],
-            axis_commands["yaw"],
-        ],
-        dtype=float,
-    )
-    thruster_vector = THRUSTER_ALLOCATION_MATRIX @ axis_vector
-
-    clipped = []
-    clipped_indices = []
-    for index, value in enumerate(thruster_vector):
-        clamped_value = clamp(float(value))
-        clipped.append(clamped_value)
-        if abs(clamped_value - float(value)) > 1e-6:
-            clipped_indices.append(
-                f"T{index + 1}:raw={float(value):+.3f}->clamped={clamped_value:+.3f}"
-            )
-
-    if clipped_indices:
-        print("Thruster outputs clipped:", ", ".join(clipped_indices))
-
-    return clipped
+    return lerp(mpu_input, joystick_input, math.fabs(joystick_input))
 
 
 def set_neutral_thrusters():
@@ -273,7 +170,7 @@ def set_client_connected(connected):
         HUD_STATE["client_connected"] = bool(connected)
 
 
-def update_hud_state(inputs, pitch_deg, roll_deg, target_pitch_deg, target_roll_deg):
+def update_hud_state(inputs, pitch_deg, roll_deg):
     with HUD_LOCK:
         HUD_STATE["thrusters"] = [float(value) for value in inputs[:8]]
         HUD_STATE["claw_angle_command"] = float(inputs[8])
@@ -281,8 +178,6 @@ def update_hud_state(inputs, pitch_deg, roll_deg, target_pitch_deg, target_roll_
         HUD_STATE["stabilization_enabled"] = bool(inputs[10])
         HUD_STATE["mpu_pitch_deg"] = float(pitch_deg)
         HUD_STATE["mpu_roll_deg"] = float(roll_deg)
-        HUD_STATE["target_pitch_deg"] = float(target_pitch_deg)
-        HUD_STATE["target_roll_deg"] = float(target_roll_deg)
 
 
 def get_hud_state():
@@ -294,8 +189,6 @@ def get_hud_state():
             "stabilization_enabled": HUD_STATE["stabilization_enabled"],
             "mpu_pitch_deg": round(HUD_STATE["mpu_pitch_deg"], 2),
             "mpu_roll_deg": round(HUD_STATE["mpu_roll_deg"], 2),
-            "target_pitch_deg": round(HUD_STATE["target_pitch_deg"], 2),
-            "target_roll_deg": round(HUD_STATE["target_roll_deg"], 2),
             "client_connected": HUD_STATE["client_connected"],
         }
 
@@ -436,23 +329,10 @@ def receive_frame(connection):
         return None
 
     decoded = json.loads(payload.decode("utf-8"))
-    if not isinstance(decoded, list) or len(decoded) != 14:
-        raise ValueError("Expected control payload as list[14]")
+    if not isinstance(decoded, list) or len(decoded) != 11:
+        raise ValueError("Expected control payload as list[11]")
 
     return decoded
-
-
-
-
-def normalize_input_target_deg(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def get_zeroed_orientation(raw_pitch_rad, raw_roll_rad):
-    return raw_pitch_rad, raw_roll_rad
 
 
 def setup_server_socket():
@@ -469,12 +349,6 @@ def run_control_server(stop_event):
     set_neutral_thrusters()
     print("Powering up ESCs")
     relay_pin.on()
-    attitude_state = {
-        "prev_pitch_error": 0.0,
-        "prev_roll_error": 0.0,
-        "prev_pitch_measurement": 0.0,
-        "prev_roll_measurement": 0.0,
-    }
 
     server_socket = setup_server_socket()
 
@@ -489,7 +363,6 @@ def run_control_server(stop_event):
             print(f"Control client connected: {client_address}")
             set_client_connected(True)
             last_packet_time = time.monotonic()
-            previous_cycle_time = last_packet_time
 
             try:
                 while not stop_event.is_set():
@@ -508,51 +381,32 @@ def run_control_server(stop_event):
                         break
 
                     last_packet_time = now
-                    dt_seconds = now - previous_cycle_time
-                    previous_cycle_time = now
 
                     try:
-                        _, _, raw_pitch_rad, raw_roll_rad = calculate_orientation_degrees()
+                        pitch_deg, roll_deg, pitch_rad, roll_rad = calculate_orientation_degrees()
                     except OSError as exc:
                         print(f"MPU read failed: {exc}")
-                        _, _, raw_pitch_rad, raw_roll_rad = 0.0, 0.0, 0.0, 0.0
+                        pitch_deg, roll_deg, pitch_rad, roll_rad = 0.0, 0.0, 0.0, 0.0
 
-                    target_pitch_deg = normalize_input_target_deg(inputs[11])
-                    target_roll_deg = normalize_input_target_deg(inputs[12])
-                    target_reset_requested = bool(inputs[13])
-                    if target_reset_requested:
-                        target_pitch_deg = 0.0
-                        target_roll_deg = 0.0
+                    if inputs[10]:
+                        pitch = pitch_rad / math.pi
+                        roll = roll_rad / math.pi
 
-                    zeroed_pitch_rad, zeroed_roll_rad = get_zeroed_orientation(raw_pitch_rad, raw_roll_rad)
-                    pitch_deg = math.degrees(zeroed_pitch_rad)
-                    roll_deg = math.degrees(zeroed_roll_rad)
-                    target_pitch_rad = math.radians(target_pitch_deg)
-                    target_roll_rad = math.radians(target_roll_deg)
-                    pilot_axes = decode_pilot_axis_commands(inputs[:8])
-                    pitch_correction, roll_correction = compute_attitude_correction(
-                        enabled=bool(inputs[10]),
-                        target_pitch_rad=target_pitch_rad,
-                        target_roll_rad=target_roll_rad,
-                        measured_pitch_rad=zeroed_pitch_rad,
-                        measured_roll_rad=zeroed_roll_rad,
-                        dt_seconds=dt_seconds,
-                        attitude_state=attitude_state,
-                    )
+                        inputs[0] = merge_inputs(inputs[0], -roll - pitch)
+                        inputs[1] = merge_inputs(inputs[1], roll - pitch)
+                        inputs[2] = merge_inputs(inputs[2], roll + pitch)
+                        inputs[3] = merge_inputs(inputs[3], -roll + pitch)
+                        inputs[4] = merge_inputs(inputs[4], -roll + pitch)
+                        inputs[5] = merge_inputs(inputs[5], roll + pitch)
+                        inputs[6] = merge_inputs(inputs[6], roll - pitch)
+                        inputs[7] = merge_inputs(inputs[7], -roll - pitch)
 
-                    axis_commands = {
-                        "surge": pilot_axes["surge"],
-                        "sway": pilot_axes["sway"],
-                        "heave": pilot_axes["heave"],
-                        "roll": pilot_axes["roll"] + roll_correction,
-                        "pitch": pilot_axes["pitch"] + pitch_correction,
-                        "yaw": pilot_axes["yaw"],
-                    }
-                    inputs[:8] = allocate_thrusters(axis_commands)
+                    for i in range(8):
+                        inputs[i] = clamp(inputs[i])
 
                     apply_thrusters(inputs)
                     apply_claw_steppers(inputs)
-                    update_hud_state(inputs, pitch_deg, roll_deg, target_pitch_deg, target_roll_deg)
+                    update_hud_state(inputs, pitch_deg, roll_deg)
 
             except OSError as exc:
                 print(f"Control connection error: {exc}")
@@ -776,8 +630,6 @@ def index():
             document.getElementById("hud-claw-rotation").textContent = formatInput(hud.claw_rotation_command);
             document.getElementById("hud-mpu-pitch").textContent = formatInput(hud.mpu_pitch_deg) + "°";
             document.getElementById("hud-mpu-roll").textContent = formatInput(hud.mpu_roll_deg) + "°";
-            document.getElementById("hud-target-pitch").textContent = formatInput(hud.target_pitch_deg) + "°";
-            document.getElementById("hud-target-roll").textContent = formatInput(hud.target_roll_deg) + "°";
 
             const thrusters = Array.isArray(hud.thrusters) ? hud.thrusters : [];
             for (let i = 0; i < 8; i++) {{
@@ -825,8 +677,6 @@ def index():
                     <div class="hud-row"><span class="hud-label">Claw rotate cmd</span><span class="hud-value" id="hud-claw-rotation">0.00</span></div>
                     <div class="hud-row"><span class="hud-label">MPU pitch</span><span class="hud-value" id="hud-mpu-pitch">0.00°</span></div>
                     <div class="hud-row"><span class="hud-label">MPU roll</span><span class="hud-value" id="hud-mpu-roll">0.00°</span></div>
-                    <div class="hud-row"><span class="hud-label">Target pitch</span><span class="hud-value" id="hud-target-pitch">0.00°</span></div>
-                    <div class="hud-row"><span class="hud-label">Target roll</span><span class="hud-value" id="hud-target-roll">0.00°</span></div>
                     <div>
                         <div class="hud-label" style="margin-bottom: 6px;">Thruster power</div>
                         <ul class="thruster-list">
