@@ -16,8 +16,8 @@ SOCKET_TIMEOUT_SECONDS = 2.0
 PS3_LAYOUT = {
     "claw_angle_increase": 14,
     "claw_angle_decrease": 12,
-    "claw_rotate_increase": 13,
-    "claw_rotate_decrease": 15,
+    "claw_rotate_increase": 15,
+    "claw_rotate_decrease": 13,
     "pitch_positive": 4,
     "pitch_negative": 6,
     "roll_positive": 5,
@@ -29,8 +29,8 @@ PS3_LAYOUT = {
 XBOX_ONE_LAYOUT = {
     "claw_angle_increase": 0,
     "claw_angle_decrease": 3,
-    "claw_rotate_increase": 1,
-    "claw_rotate_decrease": 2,
+    "claw_rotate_increase": 2,
+    "claw_rotate_decrease": 1,
     "pitch_positive": "dpad_up",
     "pitch_negative": "dpad_down",
     "roll_positive": "dpad_right",
