@@ -27,6 +27,10 @@ MAX_FRAME_SIZE = 65536
 NO_DATA_FAILSAFE_SECONDS = 0.5
 HUD_UPDATE_INTERVAL_SECONDS = 0.2
 
+
+YAW_THRUSTER_SIGNS = (1, -1, 1, -1, -1, 1, -1, 1)
+YAW_OUTPUT_SCALE = 0.45
+
 # ---------------- Webcam Server Configuration ----------------
 WEBCAM_HOST = "0.0.0.0"
 WEBCAM_PORT = 5001
@@ -152,6 +156,16 @@ def merge_inputs(joystick_input, mpu_input):
 
     return lerp(mpu_input, joystick_input, math.fabs(joystick_input))
 
+
+def reduce_yaw_output(inputs):
+    original_yaw_component = sum(
+        inputs[i] * YAW_THRUSTER_SIGNS[i] for i in range(8)
+    ) / len(YAW_THRUSTER_SIGNS)
+    scaled_yaw_component = original_yaw_component * YAW_OUTPUT_SCALE
+
+    for i in range(8):
+        non_yaw_component = inputs[i] - (YAW_THRUSTER_SIGNS[i] * original_yaw_component)
+        inputs[i] = non_yaw_component + (YAW_THRUSTER_SIGNS[i] * scaled_yaw_component)
 
 def set_neutral_thrusters():
     neutral = convert(0)
@@ -387,6 +401,8 @@ def run_control_server(stop_event):
                     except OSError as exc:
                         print(f"MPU read failed: {exc}")
                         pitch_deg, roll_deg, pitch_rad, roll_rad = 0.0, 0.0, 0.0, 0.0
+
+                    reduce_yaw_output(inputs)
 
                     if inputs[10]:
                         pitch = pitch_rad / math.pi
