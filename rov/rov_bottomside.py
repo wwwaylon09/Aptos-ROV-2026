@@ -82,10 +82,10 @@ motor_6 = 4
 motor_7 = 7
 motor_8 = 0
 
-CLAW_ANGLE_STEP_PIN = 21
-CLAW_ANGLE_DIRECTION_PIN = 20
-CLAW_ROTATE_STEP_PIN = 26
-CLAW_ROTATE_DIRECTION_PIN = 19
+CLAW_ANGLE_STEP_PIN = 26
+CLAW_ANGLE_DIRECTION_PIN = 19
+CLAW_ROTATE_STEP_PIN = 21
+CLAW_ROTATE_DIRECTION_PIN = 20
 CLAW_STEPPER_MODE_PINS = (-1, -1, -1)
 CLAW_STEPPER_DRIVER = "DRV8825"
 
@@ -115,13 +115,13 @@ HUD_STATE = {
 }
 
 STABILIZATION_INPUT_CURVE = 0.5
-STABILIZATION_AUTHORITY = 0.35
+STABILIZATION_AUTHORITY = 0.5
 
 
 # ---------------- Control Logic ----------------
 def convert(x):
     x = clamp(x)
-    throttle_multiplier = 0.35
+    throttle_multiplier = 0.4
     max_duty_cycle = 5240 + throttle_multiplier * 1640
     min_duty_cycle = 5240 - throttle_multiplier * 1640
     mapped_value = round((((x + 1) / 2) * (max_duty_cycle - min_duty_cycle)) + min_duty_cycle)
@@ -132,7 +132,7 @@ def calculate_orientation():
     accel_x, accel_y, accel_z = mpu.acceleration
     pitch = math.atan2(accel_x, math.sqrt(accel_y**2 + accel_z**2))
     roll = math.atan2(-accel_y, accel_z)
-    return pitch, roll
+    return -pitch, -roll
 
 
 def calculate_orientation_degrees():
@@ -428,14 +428,14 @@ def run_control_server(stop_event):
                         pitch_error = (zeroed_pitch_rad - target_pitch_rad) / math.pi
                         roll_error = (zeroed_roll_rad - target_roll_rad) / math.pi
 
-                        inputs[0] = merge_inputs(inputs[0], -roll_error - pitch_error)
-                        inputs[1] = merge_inputs(inputs[1], roll_error - pitch_error)
-                        inputs[2] = merge_inputs(inputs[2], roll_error + pitch_error)
-                        inputs[3] = merge_inputs(inputs[3], -roll_error + pitch_error)
-                        inputs[4] = merge_inputs(inputs[4], -roll_error + pitch_error)
-                        inputs[5] = merge_inputs(inputs[5], roll_error + pitch_error)
-                        inputs[6] = merge_inputs(inputs[6], roll_error - pitch_error)
-                        inputs[7] = merge_inputs(inputs[7], -roll_error - pitch_error)
+                        inputs[0] = merge_inputs(inputs[0], -roll_error + pitch_error)
+                        inputs[1] = merge_inputs(inputs[1], roll_error + pitch_error)
+                        inputs[2] = merge_inputs(inputs[2], roll_error - pitch_error)
+                        inputs[3] = merge_inputs(inputs[3], -roll_error - pitch_error)
+                        inputs[4] = merge_inputs(inputs[4], -roll_error - pitch_error)
+                        inputs[5] = merge_inputs(inputs[5], roll_error - pitch_error)
+                        inputs[6] = merge_inputs(inputs[6], roll_error + pitch_error)
+                        inputs[7] = merge_inputs(inputs[7], -roll_error + pitch_error)
 
                     for i in range(8):
                         inputs[i] = clamp(inputs[i])
